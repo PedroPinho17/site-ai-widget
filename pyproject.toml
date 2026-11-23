@@ -1,0 +1,57 @@
+[project]
+name = "site-ai-widget"
+version = "0.1.0"
+description = "Embeddable AI chat widget for company websites (panel API + widget backend)"
+readme = "README.md"
+authors = [
+    { name = "Pedro Pinho", email = "pedropinho364@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "email-validator>=2.2.0",
+    "fastapi>=0.163.1",
+    "psycopg-pool>=3.2.6",
+    "psycopg[binary]>=3.3.9",
+    "pydantic-settings>=2.12.0",
+    "pyjwt>=2.15.1",
+    "python-dotenv>=1.2.4",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+site-ai-widget = "site_ai_widget:main"
+site-ai-widget-migrate = "site_ai_widget.db.migrate:main"
+site-ai-widget-seed = "site_ai_widget.seed:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs Postgres running (docker compose up -d db)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF100"]
+ignore = ["B008", "E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["site_ai_widget", "tests"]

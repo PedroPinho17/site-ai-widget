@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Database backups / dumps (never commit data)
+backup/
+backups/
+db/backups/
+*.dump
+*.dump.gz
+*.backup
+*.bak
+*.sql.bak
+*.sql.gz
+*.sql.zip
+# Any SQL file is ignored by default (dumps, pg_dump output, ad-hoc exports)...
+*.sql
+# ...except the tracked reference schema and versioned migrations.
+!db/schema.sql
+!db/migrations/
+!db/migrations/V*.sql
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Eval checkpoints (later phases)
+eval/.checkpoint.json
+eval/checkpoints/
+docs/evaluation.partial.md
