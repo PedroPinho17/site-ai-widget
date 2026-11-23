@@ -79,7 +79,7 @@ because they are marked sensitive and a sensitive column can never be approved.
 The connection test refuses any user that can change the database: write or
 TRIGGER rights on a table, USAGE/UPDATE on a sequence, CREATE on a schema or the
 database, powerful role attributes, membership in `pg_write_server_files`,
-`pg_execute_server_program` or `pg_write_all_data`, and rights reachable through
+`pg_read_server_files`, `pg_execute_server_program` or `pg_write_all_data`, and rights reachable through
 `SET ROLE` to any role the user is a member of (`NOINHERIT` does not hide them).
 A login role that only gets `SELECT` through a read-only group role passes.
 On PostgreSQL 16+ a membership granted `WITH SET FALSE, INHERIT FALSE` gives no

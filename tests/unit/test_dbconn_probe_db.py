@@ -152,6 +152,7 @@ def _probe_as(role: str):
         ("probe_t_seq_usage", "GRANT USAGE ON SEQUENCE categories_id_seq TO {role}"),
         ("probe_t_trigger", "GRANT TRIGGER ON products TO {role}"),
         ("probe_t_file_writer", "GRANT pg_write_server_files TO {role}"),
+        ("probe_t_file_reader", "GRANT pg_read_server_files TO {role}"),
     ],
 )
 def test_extra_write_rights_are_refused(allow_demo, role, grant):

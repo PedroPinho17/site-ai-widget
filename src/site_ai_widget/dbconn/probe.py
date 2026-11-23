@@ -27,8 +27,10 @@ MIN_SERVER_VERSION = 130000  # PostgreSQL 13
 # Write rights: table INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER, column-level INSERT/UPDATE,
 # sequence USAGE/UPDATE (nextval/setval), CREATE on a user schema or on the database,
 # powerful role attributes, and the predefined roles that write files, run programs or
-# write all data. Predefined roles are looked up by name in pg_roles, so a role that
-# does not exist on an older server (pg_write_all_data is PostgreSQL 14+) is just absent.
+# write all data. pg_read_server_files is refused the same way: it lets SQL read any
+# file on the database server, which a widget user never needs. Predefined roles are
+# looked up by name in pg_roles, so a role that does not exist on an older server
+# (pg_write_all_data is PostgreSQL 14+) is just absent.
 _CAN_WRITE_SQL = r"""
 WITH roles AS (
     SELECT r.oid, r.rolname, r.rolsuper, r.rolcreaterole, r.rolcreatedb,
@@ -55,7 +57,10 @@ schemas AS (
 SELECT EXISTS (
            SELECT 1 FROM roles
            WHERE rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
-              OR rolname IN ('pg_write_server_files', 'pg_execute_server_program', 'pg_write_all_data')
+              OR rolname IN (
+                  'pg_write_server_files', 'pg_read_server_files',
+                  'pg_execute_server_program', 'pg_write_all_data'
+              )
        )
     OR EXISTS (
            SELECT 1
