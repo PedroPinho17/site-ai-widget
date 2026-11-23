@@ -85,6 +85,7 @@ ALLOWED_FUNCTIONS: frozenset[type[exp.Expression]] = frozenset(
         exp.Right,
         exp.Round,
         exp.RowNumber,
+        exp.StrPosition,  # position(x IN y) / strpos(y, x): plain search, not regex
         exp.StrToDate,
         exp.Substring,
         exp.Sum,
@@ -96,7 +97,7 @@ ALLOWED_FUNCTIONS: frozenset[type[exp.Expression]] = frozenset(
 )
 
 # Functions sqlglot does not map to a typed node (name compared lowercased).
-# left / right / nullif are typed nodes above when called unqualified.
+# left / right / nullif, and position / strpos (StrPosition), are typed nodes above.
 ALLOWED_ANONYMOUS: frozenset[str] = frozenset(
     {
         "age",
@@ -104,8 +105,6 @@ ALLOWED_ANONYMOUS: frozenset[str] = frozenset(
         "date",
         "date_part",
         "date_trunc",
-        "position",
-        "strpos",
         "to_char",
         "to_date",
         "to_timestamp",
@@ -135,6 +134,17 @@ ALLOWED_OPERATORS: frozenset[type[exp.Expression]] = frozenset(
         exp.Is,
         exp.And,
         exp.Or,
+    }
+)
+
+# Unary (prefix) operators that may reach Postgres. Exact type match only. A prefix
+# operator resolves through search_path like a binary one, so ~x (BitwiseNot), +x (Pos)
+# and anything else sqlglot models as Unary are rejected.
+ALLOWED_UNARY: frozenset[type[exp.Expression]] = frozenset(
+    {
+        exp.Neg,
+        exp.Not,
+        exp.Paren,
     }
 )
 
@@ -448,6 +458,7 @@ def _check_functions(query: exp.Expression) -> None:
     if any(query.find_all(exp.SimilarTo)):
         raise SQLRejected("function_not_allowed", "SIMILAR TO is not allowed.")
     _check_binary_operators(query)
+    _check_unary_operators(query)
     for func in query.find_all(exp.Func):
         # schema.func(...) parses as Dot(schema, func): it would run whatever function
         # of that name exists in that schema, so the name allowlist does not apply.
@@ -472,6 +483,16 @@ def _check_binary_operators(query: exp.Expression) -> None:
         if type(node) is exp.Dot:
             continue
         if type(node) not in ALLOWED_OPERATORS:
+            raise SQLRejected(
+                "operator_not_allowed",
+                f"Operator {type(node).__name__} is not allowed.",
+            )
+
+
+def _check_unary_operators(query: exp.Expression) -> None:
+    """Reject Unary (prefix) nodes outside ALLOWED_UNARY (e.g. ~x, +x)."""
+    for node in query.find_all(exp.Unary):
+        if type(node) not in ALLOWED_UNARY:
             raise SQLRejected(
                 "operator_not_allowed",
                 f"Operator {type(node).__name__} is not allowed.",

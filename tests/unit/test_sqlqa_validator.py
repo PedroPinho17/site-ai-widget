@@ -655,3 +655,61 @@ def test_column_with_more_than_two_parts_is_rejected():
 def test_normal_dotted_columns_still_pass(sql, expected):
     """table.column references are Columns, not field access."""
     assert validate_sql(sql, ALLOWED) == expected
+
+
+# ---------- unary (prefix) operators ----------
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ~price FROM products",
+        "SELECT name FROM products WHERE ~price < 0",
+    ],
+)
+def test_unary_operators_outside_the_allowlist_are_rejected(sql):
+    assert reason(sql) == "operator_not_allowed"
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            "SELECT -price FROM products",
+            'SELECT -"products"."price" AS "_col_0" FROM "public"."products" AS "products" LIMIT 100',
+        ),
+        (
+            "SELECT name FROM products WHERE NOT (price > 1)",
+            'SELECT "products"."name" AS "name" FROM "public"."products" AS "products" '
+            'WHERE NOT ("products"."price" > 1) LIMIT 100',
+        ),
+        (
+            # sqlglot drops a unary plus while parsing: nothing reaches Postgres.
+            "SELECT +price FROM products",
+            'SELECT "products"."price" AS "price" FROM "public"."products" AS "products" LIMIT 100',
+        ),
+    ],
+)
+def test_allowed_unary_operators_still_pass(sql, expected):
+    assert validate_sql(sql, ALLOWED) == expected
+
+
+# ---------- position / strpos (StrPosition) ----------
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT position('a' IN name) FROM products",
+        "SELECT strpos(name, 'a') FROM products",
+    ],
+)
+def test_position_and_strpos_are_allowed(sql):
+    assert validate_sql(sql, ALLOWED) == (
+        'SELECT POSITION(\'a\' IN "products"."name") AS "_col_0" '
+        'FROM "public"."products" AS "products" LIMIT 100'
+    )
+
+
+def test_schema_qualified_strpos_is_still_rejected():
+    assert reason("SELECT evil.strpos(name, 'a') FROM products") == "function_not_allowed"
