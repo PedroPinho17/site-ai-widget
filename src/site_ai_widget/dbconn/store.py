@@ -18,8 +18,27 @@ from dataclasses import dataclass
 
 import psycopg
 
+from site_ai_widget.db.pool import connection
+from site_ai_widget.dbconn.crypto import decrypt_dsn
 from site_ai_widget.dbconn.introspect import TableInfo
 from site_ai_widget.dbconn.sensitive import is_sensitive_name
+from site_ai_widget.dbconn.target import ConnectionParams, params_from_conninfo
+
+
+def load_connection_params(company_id: str) -> ConnectionParams | None:
+    """Load the company's stored client DB params (same source as probe/connect).
+
+    Returns None when no connection is saved. Decrypt errors raise ApiError
+    (``connection_unreadable`` / ``connections_not_configured``).
+    """
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT dsn_encrypted FROM db_connections WHERE company_id = %s",
+            (str(company_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    return params_from_conninfo(decrypt_dsn(row[0]))
 
 
 @dataclass(frozen=True)
