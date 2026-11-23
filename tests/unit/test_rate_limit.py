@@ -88,3 +88,33 @@ def test_max_keys_cap_evicts_least_recent(clock):
     # an existing key below the cap is never evicted
     limiter.check("b")
     assert set(limiter._calls) == {"b", "c", "d"}
+
+
+def test_check_many_records_in_every_bucket():
+    limiter = RateLimiter(max_calls=2, per_seconds=60)
+    limiter.check_many(("company:a", "ip:1"))
+    limiter.check_many(("company:a", "ip:1"))
+    with pytest.raises(ApiError):
+        limiter.check("company:a")
+    with pytest.raises(ApiError):
+        limiter.check("ip:1")
+
+
+def test_check_many_refused_by_one_bucket_spends_none():
+    """The IP bucket is full: the company bucket must not lose budget for that request."""
+    limiter = RateLimiter(max_calls=1, per_seconds=60)
+    limiter.check_many(("company:a", "ip:shared"))
+    with pytest.raises(ApiError) as exc:
+        limiter.check_many(("company:b", "ip:shared"))  # refused by the IP bucket
+    assert exc.value.status == 429
+    assert "company:b" not in limiter._calls
+    # Company b still has its whole budget from another IP.
+    limiter.check_many(("company:b", "ip:other"))
+
+
+def test_check_many_order_does_not_matter():
+    limiter = RateLimiter(max_calls=1, per_seconds=60)
+    limiter.check("ip:shared")
+    with pytest.raises(ApiError):
+        limiter.check_many(("ip:shared", "company:c"))  # full bucket listed first
+    assert "company:c" not in limiter._calls

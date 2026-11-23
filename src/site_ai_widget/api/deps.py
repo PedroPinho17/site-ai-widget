@@ -42,6 +42,9 @@ def reset_limiters() -> None:
     api_limiter = None
     ask_limiter = None
     _settings = None
+    from site_ai_widget.api.routes.db_connection import reset_db_connection_limiters
+
+    reset_db_connection_limiters()
 
 
 def resolve_client_ip(request: Request) -> str:

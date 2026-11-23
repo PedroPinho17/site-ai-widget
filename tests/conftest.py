@@ -55,6 +55,32 @@ def reset_postgres_available_cache() -> None:
     _POSTGRES_AVAILABLE = None
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _drop_leftover_noise_schema():
+    """A killed run can leave the 300 zz_noise tables on the demo client DB; they would
+    change other tests' table counts. Drop them once at the start. Quietly does nothing
+    when the demo client DB (or its owner password) is not available, e.g. in CI.
+    """
+    owner_pw = os.environ.get("CLIENTDB_PASSWORD")
+    if owner_pw:
+        try:
+            import psycopg
+
+            with psycopg.connect(
+                host="127.0.0.1",
+                port=5436,
+                dbname="atlas",
+                user="atlas_owner",
+                password=owner_pw,
+                connect_timeout=_POSTGRES_CONNECT_TIMEOUT,
+                autocommit=True,
+            ) as conn:
+                conn.execute("DROP SCHEMA IF EXISTS zz_noise CASCADE")
+        except Exception:
+            pass
+    yield
+
+
 @pytest.fixture(scope="session")
 def require_postgres():
     if not postgres_available():

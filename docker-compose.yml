@@ -18,6 +18,28 @@ services:
       timeout: 3s
       retries: 10
 
+  clientdb:
+    # Base de dados de demo do "cliente" (Mercearia Atlas). O widget só lê daqui.
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: atlas_owner
+      # ":-" e não ":?", para não partir os outros comandos do compose.
+      # A imagem do Postgres recusa arrancar sem password, e o 02_readonly_user.sh também.
+      POSTGRES_PASSWORD: ${CLIENTDB_PASSWORD:-}
+      POSTGRES_DB: atlas
+      ATLAS_READONLY_PASSWORD: ${ATLAS_READONLY_PASSWORD:-}
+    ports:
+      - "127.0.0.1:5436:5432"
+    volumes:
+      - clientdata:/var/lib/postgresql/data
+      - ./demo/clientdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas_owner -d atlas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     restart: unless-stopped
@@ -26,6 +48,8 @@ services:
       DATABASE_URL: postgresql://sitewidget:${POSTGRES_PASSWORD}@db:5432/sitewidget
       UPLOAD_DIR: /app/data/uploads
       HF_HOME: /opt/hf
+      # Reach the demo client DB by Docker DNS (host port 5436 maps to 5432 inside the network).
+      CLIENTDB_ALLOWED_HOSTS: clientdb:5432
       # 1 = seed demo companies + PDFs before uvicorn starts (shell or .env)
       RUN_SEED: ${RUN_SEED:-0}
     depends_on:
@@ -45,3 +69,4 @@ volumes:
   pgdata:
   uploads:
   hf_cache:
+  clientdata:

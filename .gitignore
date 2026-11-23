@@ -32,6 +32,7 @@ db/backups/
 !db/migrations/
 !db/migrations/V*.sql
 !db/migrations/R__*.sql
+!demo/clientdb/*.sql
 
 # Local uploads and embedding model cache
 data/uploads*/

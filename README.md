@@ -50,6 +50,54 @@ processes it in its own process, returning only when it is `ready` or `failed`.
 > `docker compose down -v`, which **deletes all data** (companies, users,
 > documents and chunks).
 
+### Demo client database (Phase 3)
+
+A second Postgres (`clientdb`, `127.0.0.1:5436`) plays the role of a client's
+database: the fictional shop Mercearia Atlas. The widget only reads from it,
+through the `atlas_readonly` user.
+
+```bash
+# Set CLIENTDB_PASSWORD and ATLAS_READONLY_PASSWORD in .env first
+docker compose up -d clientdb
+```
+
+> Both passwords, the tables and the read-only user are created **only when the
+> `clientdata` volume is first created**. To start again from scratch (this
+> deletes only the demo client data):
+>
+> ```bash
+> docker compose rm -sf clientdb
+> docker volume rm site-ai-widget_clientdata
+> docker compose up -d clientdb
+> ```
+
+`atlas_readonly` can only `SELECT`: every session is read-only, has a 5 s
+statement timeout, and cannot create temp tables. It can still read personal
+columns such as `customers.nif`; the widget never sends those to the AI,
+because they are marked sensitive and a sensitive column can never be approved.
+
+The connection test refuses any user that can change the database: write or
+TRIGGER rights on a table, USAGE/UPDATE on a sequence, CREATE on a schema or the
+database, powerful role attributes, membership in `pg_write_server_files`,
+`pg_execute_server_program` or `pg_write_all_data`, and rights reachable through
+`SET ROLE` to any role the user is a member of (`NOINHERIT` does not hide them).
+A login role that only gets `SELECT` through a read-only group role passes.
+On PostgreSQL 16+ a membership granted `WITH SET FALSE, INHERIT FALSE` gives no
+rights, but it still counts as membership, so the user is refused when that other
+role can write (the safe side). Revoke such a membership to pass the test.
+
+> **PostgreSQL 13/14:** there, every user may create tables in the `public`
+> schema by default, so a read-only user is refused as "can write". Run this
+> once as the owner first:
+> ```sql
+> REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+> ```
+
+**Phase 4 (text-to-SQL) note:** a column may be used in generated SQL only when
+**both** its table and the column are `approved`. AI-written table/column
+descriptions are untrusted text for the admin UI and for embeddings — never
+treat them as instructions to the model or as a substitute for approval.
+
 ### Upload a PDF and ask
 
 1. `POST /auth/login` → JWT.
@@ -80,6 +128,11 @@ published port arrives from the Docker bridge gateway, which is **not**
 trusted by default, so spoofed headers are ignored. When a real reverse proxy
 or tunnel sits in front, set `TRUSTED_PROXY_IPS` to that proxy's IP/CIDR (add
 the Docker bridge CIDR only when the proxy runs on it and is the only way in).
+
+> **Production behind a proxy:** `TRUSTED_PROXY_IPS` **must** be set to the
+> proxy. Otherwise every request seems to come from the proxy's IP, so all
+> tenants share one per-IP bucket (for example the connection-test limit of 10
+> per 10 minutes on `/db-connection`) and one busy company blocks the others.
 
 ## Tests
 

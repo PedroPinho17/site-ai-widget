@@ -4,6 +4,7 @@ Required secrets have no defaults: the process refuses to start without them.
 """
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,6 +14,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     database_url: str = Field(..., min_length=1, description="Postgres connection URL")
@@ -49,6 +51,49 @@ class Settings(BaseSettings):
 
     demo_password_atlas: str | None = None
     demo_password_lima: str | None = None
+
+    # Phase 3: Fernet key that encrypts saved client DB connections (DSNs).
+    # Optional like the Groq keys: without it the connection routes return 503.
+    connections_key: str | None = None
+
+    @field_validator("connections_key")
+    @classmethod
+    def connections_key_valid(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        try:
+            Fernet(value.encode())
+        except (ValueError, TypeError):
+            raise ValueError(
+                "CONNECTIONS_KEY must be a Fernet key (generate with Fernet.generate_key())."
+            ) from None
+        return value
+
+    # Phase 3: private/local "host:port" pairs the connection test may still reach,
+    # e.g. the demo client DB (127.0.0.1:5436 locally, clientdb:5432 inside Docker).
+    clientdb_allowed_hosts: str = ""
+
+    @field_validator("clientdb_allowed_hosts")
+    @classmethod
+    def clientdb_allowed_hosts_valid(cls, value: str) -> str:
+        for item in value.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            host, sep, port = item.rpartition(":")
+            if not sep or not host or not port.isdigit() or not 1 <= int(port) <= 65535:
+                raise ValueError("CLIENTDB_ALLOWED_HOSTS must be a comma-separated list of host:port.")
+        return value
+
+    def clientdb_allowlist(self) -> frozenset[tuple[str, int]]:
+        """CLIENTDB_ALLOWED_HOSTS as (host, port) pairs, host in lowercase."""
+        pairs: set[tuple[str, int]] = set()
+        for item in self.clientdb_allowed_hosts.split(","):
+            host, _, port = item.strip().rpartition(":")
+            if host and port.isdigit():
+                pairs.add((host.lower(), int(port)))
+        return frozenset(pairs)
 
     @field_validator("jwt_secret")
     @classmethod

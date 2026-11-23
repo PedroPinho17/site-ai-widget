@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from datetime import datetime
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -218,3 +219,98 @@ class WidgetKeyResponse(BaseModel):
     allowed_origins: list[str]
     is_active: bool
     created_at: datetime
+
+
+# Phase 3: client database connection
+
+
+class DbConnectionSave(BaseModel):
+    host: str = Field(min_length=1, max_length=253)
+    port: int = Field(default=5432, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=63)
+    username: str = Field(min_length=1, max_length=63)
+    password: str = Field(min_length=1, max_length=200, repr=False)
+
+    @field_validator("host", "database", "username", "password")
+    @classmethod
+    def no_control_chars(cls, value: str) -> str:
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError("control characters are not allowed")
+        return value
+
+
+class DbConnectionResponse(BaseModel):
+    """Never contains the password or the DSN."""
+
+    host: str
+    port: int
+    database: str
+    username: str
+    status: str
+    last_error: str | None = None
+    last_checked_at: datetime | None = None
+    last_introspected_at: datetime | None = None
+    readable_tables: int | None = None
+
+
+class IntrospectResponse(BaseModel):
+    tables: int
+    columns: int
+    removed_tables: int
+    needs_review: int
+
+
+class SuggestResponse(BaseModel):
+    suggested: int
+    remaining: int
+
+
+class SchemaColumnResponse(BaseModel):
+    id: UUID
+    name: str
+    data_type: str
+    is_nullable: bool
+    ordinal: int
+    status: str
+    is_sensitive: bool
+    description: str | None = None
+    is_present: bool
+
+
+class SchemaTableResponse(BaseModel):
+    id: UUID
+    schema_name: str
+    name: str
+    kind: str
+    status: str
+    ai_suggested: bool
+    description: str | None = None
+    is_present: bool
+    columns: list[SchemaColumnResponse]
+
+
+class SchemaResponse(BaseModel):
+    tables: list[SchemaTableResponse]
+
+
+SchemaStatus = Literal["pending", "approved", "excluded"]
+
+
+class SchemaTableUpdate(BaseModel):
+    """Only the fields that are sent change. An empty description clears it."""
+
+    status: SchemaStatus | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("description")
+    @classmethod
+    def clean_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError("control characters are not allowed")
+        return value.strip()
+
+
+class SchemaColumnUpdate(SchemaTableUpdate):
+    is_sensitive: bool | None = None

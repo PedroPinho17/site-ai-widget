@@ -48,31 +48,49 @@ class RateLimiter:
 
     def check(self, key: str) -> None:
         """Record a call; raise 429 if the key has exhausted its budget."""
+        self.check_many((key,))
+
+    def check_many(self, keys) -> None:
+        """Record one call on every key, or on none of them.
+
+        All buckets are checked first; only when every one has room is the call
+        recorded in all of them. A request refused by one bucket (say the
+        client IP) therefore does not spend the others (say the company).
+        """
+        keys = list(dict.fromkeys(keys))
         now = time.monotonic()
         with self._lock:
-            if now - self._last_sweep > self.per_seconds or (
-                key not in self._calls and len(self._calls) >= self.max_keys
-            ):
+            if now - self._last_sweep > self.per_seconds:
                 self._sweep(now)
 
-            calls = self._calls.get(key)
-            if calls is not None:
+            # 1) Check every bucket without recording anything.
+            for key in keys:
+                calls = self._calls.get(key)
+                if calls is None:
+                    continue
                 self._prune(calls, now)
                 if not calls:
                     del self._calls[key]
-                    calls = None
+                    continue
+                if len(calls) >= self.max_calls:
+                    retry = int(self.per_seconds - (now - calls[0])) + 1
+                    err = ApiError("rate_limited", 429)
+                    err.headers = {"Retry-After": str(max(retry, 1))}
+                    raise err
 
-            if calls is None:
-                if len(self._calls) >= self.max_keys:
-                    # Still full after the sweep: evict the least recently used key.
-                    lru = min(self._calls, key=lambda k: self._calls[k][-1])
-                    del self._calls[lru]
-                calls = deque()
-                self._calls[key] = calls
-
-            if len(calls) >= self.max_calls:
-                retry = int(self.per_seconds - (now - calls[0])) + 1
-                err = ApiError("rate_limited", 429)
-                err.headers = {"Retry-After": str(max(retry, 1))}
-                raise err
-            calls.append(now)
+            # 2) Every bucket has room: record the call in all of them.
+            for key in keys:
+                calls = self._calls.get(key)
+                if calls is None:
+                    if len(self._calls) >= self.max_keys:
+                        self._sweep(now)
+                    if len(self._calls) >= self.max_keys:
+                        # Still full after the sweep: evict the least recently used key
+                        # (never one this call is recording).
+                        others = [k for k in self._calls if k not in keys]
+                        if others:
+                            lru = min(others, key=lambda k: self._calls[k][-1])
+                            del self._calls[lru]
+                    calls = deque()
+                    self._calls[key] = calls
+                calls.append(now)
