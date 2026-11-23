@@ -34,6 +34,9 @@ class _Result:
     def fetchall(self) -> list[tuple]:
         return list(self._rows)
 
+    def fetchone(self) -> tuple | None:
+        return self._rows[0] if self._rows else None
+
 
 class _FakeConn:
     """Records SQL/params (and transaction use) and returns scripted rows."""
@@ -43,9 +46,11 @@ class _FakeConn:
         *,
         table_rows: list[tuple] | None = None,
         column_rows: list[tuple] | None = None,
+        hnsw_iterative_scan: str | None = "off",
     ) -> None:
         self.table_rows = table_rows or []
         self.column_rows = column_rows or []
+        self.hnsw_iterative_scan = hnsw_iterative_scan
         self.calls: list[tuple[str, Any]] = []
         self.in_transaction = False
         self.calls_in_transaction: list[str] = []
@@ -62,6 +67,8 @@ class _FakeConn:
         self.calls.append((sql, params))
         if self.in_transaction:
             self.calls_in_transaction.append(sql)
+        if "current_setting('hnsw.iterative_scan', true)" in sql:
+            return _Result([(self.hnsw_iterative_scan,)])
         if "FROM schema_tables" in sql:
             return _Result(self.table_rows)
         if "FROM schema_columns" in sql:
@@ -169,11 +176,27 @@ def test_columns_query_filters_company_and_sensitivity_not_only_table_id():
 def test_iterative_scan_is_set_locally_in_the_same_transaction():
     conn = _products_conn()
     retrieve_schema(COMPANY_A, "products", conn=conn)
-    assert conn.calls[0][0] == "SET LOCAL hnsw.iterative_scan = relaxed_order"
     in_tx = conn.calls_in_transaction
-    assert in_tx[0] == "SET LOCAL hnsw.iterative_scan = relaxed_order"
+    assert in_tx[0] == "SELECT current_setting('hnsw.iterative_scan', true)"
+    assert "SET LOCAL hnsw.iterative_scan = relaxed_order" in in_tx
     assert any("FROM schema_tables" in sql for sql in in_tx)
     assert any("FROM schema_columns" in sql for sql in in_tx)
+
+
+def test_iterative_scan_is_restored_to_the_previous_value():
+    conn = _FakeConn(
+        table_rows=[(PRODUCTS_ID, "public", "products", "table", "Products")],
+        column_rows=[(PRODUCTS_ID, "name", "text", "Name")],
+        hnsw_iterative_scan="strict_order",
+    )
+    retrieve_schema(COMPANY_A, "products", conn=conn)
+    set_calls = [sql for sql in conn.calls_in_transaction if sql.startswith("SET LOCAL hnsw")]
+    assert set_calls[0] == "SET LOCAL hnsw.iterative_scan = relaxed_order"
+    assert set_calls[-1] == "SET LOCAL hnsw.iterative_scan = strict_order"
+    # Restore runs after the schema queries (and still inside the transaction).
+    assert conn.calls_in_transaction.index(set_calls[-1]) > max(
+        i for i, sql in enumerate(conn.calls_in_transaction) if "FROM schema_" in sql
+    )
 
 
 # ---------- top_k ----------
@@ -406,3 +429,110 @@ def test_integration_isolation_filters_and_prompt(settings_env):
 
     # top_k is honoured exactly when there are enough tables.
     assert len(retrieve_schema(company_b, question, top_k=2).tables) == 2
+
+
+# ---------- hnsw.iterative_scan read / restore (H1, L1) ----------
+
+
+@pytest.mark.parametrize(
+    ("current", "restored"),
+    [
+        (None, "off"),  # setting not registered yet in this session
+        ("relaxed_order", "relaxed_order"),
+        ("strict_order", "strict_order"),
+        ("off", "off"),
+        ("off; DROP TABLE companies", "off"),  # never interpolated as-is
+        ("", "off"),
+    ],
+)
+def test_restored_value_comes_from_current_setting_and_is_allowlisted(current, restored):
+    conn = _FakeConn(
+        table_rows=[(PRODUCTS_ID, "public", "products", "table", "Products")],
+        column_rows=[(PRODUCTS_ID, "name", "text", "Name")],
+        hnsw_iterative_scan=current,
+    )
+    retrieve_schema(COMPANY_A, "products", conn=conn)
+    set_calls = [sql for sql in conn.calls_in_transaction if sql.startswith("SET LOCAL hnsw")]
+    assert set_calls == [
+        "SET LOCAL hnsw.iterative_scan = relaxed_order",
+        f"SET LOCAL hnsw.iterative_scan = {restored}",
+    ]
+    assert not any(sql.upper().startswith("SHOW") for sql, _ in conn.calls)
+
+
+def test_empty_result_also_restores_the_setting():
+    conn = _FakeConn(table_rows=[], hnsw_iterative_scan="strict_order")
+    retrieve_schema(COMPANY_A, "products", conn=conn)
+    set_calls = [sql for sql in conn.calls_in_transaction if sql.startswith("SET LOCAL hnsw")]
+    assert set_calls[-1] == "SET LOCAL hnsw.iterative_scan = strict_order"
+
+
+def test_query_error_is_raised_unchanged_and_no_restore_is_attempted():
+    class Boom(Exception):
+        pass
+
+    class FailingConn(_FakeConn):
+        def execute(self, sql, params=None):
+            if "FROM schema_tables" in sql:
+                self.calls.append((sql, params))
+                raise Boom("table query failed")
+            return super().execute(sql, params)
+
+    conn = FailingConn(hnsw_iterative_scan="strict_order")
+    with pytest.raises(Boom):
+        retrieve_schema(COMPANY_A, "products", conn=conn)
+    set_calls = [sql for sql, _ in conn.calls if sql.startswith("SET LOCAL hnsw")]
+    assert set_calls == ["SET LOCAL hnsw.iterative_scan = relaxed_order"]
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not postgres_available(),
+    reason="Postgres is not reachable (docker compose up -d db)",
+)
+def test_brand_new_connection_works_before_pgvector_is_loaded(settings_env):
+    """pgvector registers hnsw.iterative_scan only after its first use in a session."""
+    import psycopg
+
+    from site_ai_widget.api.config import get_settings
+    from site_ai_widget.db.migrate import migrate
+    from site_ai_widget.db.pool import close_pool
+
+    migrate()
+    unknown_company = str(uuid.uuid4())
+
+    # Brand-new pool: its first connection has never used a vector.
+    close_pool()
+    try:
+        assert retrieve_schema(unknown_company, "Quanto custa o azeite?") == SchemaSlice(
+            tables=(), allowed={}
+        )
+    finally:
+        close_pool()
+
+    # Brand-new direct connection, checked to really be fresh.
+    with psycopg.connect(get_settings().database_url, autocommit=True) as conn:
+        fresh = conn.execute("SELECT current_setting('hnsw.iterative_scan', true)").fetchone()[0]
+        assert fresh is None
+        assert retrieve_schema(unknown_company, "Quanto custa?", conn=conn) == SchemaSlice(
+            tables=(), allowed={}
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not postgres_available(),
+    reason="Postgres is not reachable (docker compose up -d db)",
+)
+@pytest.mark.parametrize("autocommit", [True, False])
+def test_original_query_error_is_raised_on_a_real_connection(settings_env, autocommit):
+    import psycopg
+
+    from site_ai_widget.api.config import get_settings
+
+    with psycopg.connect(get_settings().database_url, autocommit=autocommit) as conn:
+        if not autocommit:
+            conn.execute("SELECT 1")  # the caller already holds a transaction
+        with pytest.raises(psycopg.errors.InvalidTextRepresentation):
+            retrieval._retrieve(conn, str(uuid.uuid4()), "[not-a-vector]", 4)
+        conn.rollback()
