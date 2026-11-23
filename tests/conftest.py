@@ -25,16 +25,34 @@ os.environ.setdefault("ASK_RATE_LIMIT_WINDOW", "60")
 os.environ.setdefault("SITE_AI_WIDGET_FAKE_EMBEDDER", "1")
 os.environ.setdefault("UPLOAD_DIR", "data/uploads-test")
 
+# One probe per process: skipif on many modules must not each wait on TCP.
+_POSTGRES_AVAILABLE: bool | None = None
+_POSTGRES_CONNECT_TIMEOUT = 1  # seconds; keep short so DB-down suites finish quickly
+
 
 def postgres_available() -> bool:
+    """True if DATABASE_URL answers quickly. Result is cached for the session."""
+    global _POSTGRES_AVAILABLE
+    if _POSTGRES_AVAILABLE is not None:
+        return _POSTGRES_AVAILABLE
     try:
         import psycopg
 
-        with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=2) as conn:
+        with psycopg.connect(
+            os.environ["DATABASE_URL"],
+            connect_timeout=_POSTGRES_CONNECT_TIMEOUT,
+        ) as conn:
             conn.execute("SELECT 1")
-        return True
+        _POSTGRES_AVAILABLE = True
     except Exception:
-        return False
+        _POSTGRES_AVAILABLE = False
+    return _POSTGRES_AVAILABLE
+
+
+def reset_postgres_available_cache() -> None:
+    """Tests that stop/start Postgres in-process (rare)."""
+    global _POSTGRES_AVAILABLE
+    _POSTGRES_AVAILABLE = None
 
 
 @pytest.fixture(scope="session")

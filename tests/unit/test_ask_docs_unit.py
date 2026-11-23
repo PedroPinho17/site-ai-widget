@@ -14,8 +14,9 @@ from site_ai_widget.docs.embed import FakeEmbedder, set_embedder
 
 @pytest.fixture
 def ask_client(monkeypatch):
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_FALLBACK", raising=False)
+    # Empty env overrides values from .env (delenv alone would fall back to the file).
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
     monkeypatch.setenv("SITE_AI_WIDGET_FAKE_EMBEDDER", "1")
     clear_settings_cache()
     reset_limiters()
@@ -55,8 +56,9 @@ def test_ask_docs_overlong_question_422(ask_client, monkeypatch):
 
 
 def test_ask_docs_503_without_groq_when_chunks_exist(ask_client, monkeypatch):
-    client, company_id = ask_client
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    client, _company_id = ask_client
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
     clear_settings_cache()
 
     fake_chunks = [
@@ -88,7 +90,8 @@ def test_ask_docs_503_without_groq_when_chunks_exist(ask_client, monkeypatch):
 def test_ask_rate_limit(monkeypatch):
     monkeypatch.setenv("ASK_RATE_LIMIT", "2")
     monkeypatch.setenv("ASK_RATE_LIMIT_WINDOW", "60")
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
     clear_settings_cache()
     reset_limiters()
     set_embedder(FakeEmbedder())

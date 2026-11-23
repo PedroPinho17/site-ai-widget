@@ -96,3 +96,58 @@ def test_reseed_finishes_a_stuck_pending_pdf(seed_env):
     assert again_id == doc_id
     assert status == "ready"
     assert chunks >= 1
+
+
+def test_reseed_recovers_stuck_processing_past_threshold(seed_env):
+    """Crash mid-processing leaves status=processing; seed resets if old enough."""
+    from site_ai_widget.db.pool import connection
+    from site_ai_widget.seed import seed
+
+    demo = _demo()
+    seed(demos=(demo,))
+    doc_id, _, _, _ = _doc_for(demo["slug"])
+    with connection() as conn:
+        conn.execute("DELETE FROM document_chunks WHERE document_id = %s", (doc_id,))
+        conn.execute(
+            """
+            UPDATE documents
+            SET status = 'processing',
+                updated_at = now() - interval '10 minutes'
+            WHERE id = %s
+            """,
+            (doc_id,),
+        )
+
+    assert seed(demos=(demo,)) == []
+    again_id, status, _, chunks = _doc_for(demo["slug"])
+    assert again_id == doc_id
+    assert status == "ready"
+    assert chunks >= 1
+
+
+def test_reseed_leaves_fresh_processing_alone(seed_env):
+    """A recently updated processing row is treated as an active worker job."""
+    from site_ai_widget.db.pool import connection
+    from site_ai_widget.seed import seed
+
+    demo = _demo()
+    seed(demos=(demo,))
+    doc_id, _, company_id, chunks_before = _doc_for(demo["slug"])
+    with connection() as conn:
+        conn.execute("DELETE FROM document_chunks WHERE document_id = %s", (doc_id,))
+        conn.execute(
+            """
+            UPDATE documents
+            SET status = 'processing', updated_at = now()
+            WHERE id = %s
+            """,
+            (doc_id,),
+        )
+
+    assert seed(demos=(demo,)) == []
+    again_id, status, again_co, chunks = _doc_for(demo["slug"])
+    assert again_id == doc_id
+    assert again_co == company_id
+    assert status == "processing"
+    assert chunks == 0
+    assert chunks_before >= 1  # was ready before we simulated an active job

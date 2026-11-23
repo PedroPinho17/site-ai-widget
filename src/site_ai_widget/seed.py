@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from site_ai_widget.api.auth import hash_password
+from site_ai_widget.api.config import get_settings
 from site_ai_widget.db.pool import close_pool, connection
 from site_ai_widget.docs.process import process_document
 from site_ai_widget.docs.storage import new_storage_name, storage_path, upload_root
@@ -83,8 +84,6 @@ def _insert_demo_pdf(company_id, admin_id, demo: dict, database_url: str | None)
     dest = storage_path(storage_name)
     shutil.copy2(src, dest)
     try:
-        from site_ai_widget.api.config import get_settings
-
         page_count = inspect_pdf(dest, max_pages=get_settings().max_pdf_pages)
     except Exception:
         dest.unlink(missing_ok=True)
@@ -128,18 +127,68 @@ def _document_status(document_id, database_url: str | None) -> str | None:
     return row[0] if row else None
 
 
+def reset_stuck_processing_document(
+    document_id,
+    company_id,
+    *,
+    database_url: str | None = None,
+    stuck_after_seconds: int | None = None,
+) -> bool:
+    """Reset a demo document from ``processing`` → ``pending`` only if stuck.
+
+    A row is stuck when ``updated_at`` is older than ``stuck_after_seconds``
+    (default from ``DOCUMENT_STUCK_PROCESSING_SECONDS``). Recently updated
+    ``processing`` rows are left alone so a live API worker is not interrupted.
+
+    Returns True when the row was reset to ``pending``.
+    """
+    seconds = (
+        stuck_after_seconds
+        if stuck_after_seconds is not None
+        else get_settings().document_stuck_processing_seconds
+    )
+    with connection(database_url) as conn:
+        row = conn.execute(
+            """
+            UPDATE documents
+            SET status = 'pending', error = NULL, updated_at = now()
+            WHERE id = %s
+              AND company_id = %s
+              AND status = 'processing'
+              AND updated_at < now() - (%s * interval '1 second')
+            RETURNING id
+            """,
+            (str(document_id), str(company_id), int(seconds)),
+        ).fetchone()
+    return row is not None
+
+
 def _seed_pdf(company_id, admin_id, demo: dict, database_url: str | None = None) -> str | None:
     """Insert (if needed) and process the demo PDF synchronously.
 
     Runs in the seed process and returns only once the document is ``ready``
-    or ``failed`` — no background thread that dies with the process, and no
-    dependency on an API restart. ``process_document`` claims the row
-    atomically, so a running API worker cannot process it twice.
+    or ``failed`` — except when it is ``processing`` and still fresh (likely a
+    live API worker), in which case it is left alone.
     """
     found = _insert_demo_pdf(company_id, admin_id, demo, database_url)
     if found is None:
         return None
     doc_id, status = found
+
+    if status == "processing":
+        if reset_stuck_processing_document(doc_id, company_id, database_url=database_url):
+            log.info(
+                "Reset stuck processing demo PDF for %s → pending",
+                demo["slug"],
+            )
+            status = "pending"
+        else:
+            log.info(
+                "Demo PDF for %s still processing (updated recently); leaving alone",
+                demo["slug"],
+            )
+            return status
+
     if status == "pending":
         log.info("Processing demo PDF for %s ...", demo["slug"])
         process_document(doc_id, company_id)

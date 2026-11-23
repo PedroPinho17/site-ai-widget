@@ -18,16 +18,47 @@ from site_ai_widget.docs.worker import recover_stuck_documents, shutdown_worker
 
 log = logging.getLogger("site_ai_widget")
 
+# Lifespan runs once per process in production; tests create many apps — cache the
+# probe so a downed Postgres does not cost connect_timeout on every TestClient.
+_db_reachable_cache: bool | None = None
+
+
+def reset_db_reachable_cache() -> None:
+    global _db_reachable_cache
+    _db_reachable_cache = None
+
+
+def _db_reachable(database_url: str, *, connect_timeout: float = 1.0) -> bool:
+    """Cheap probe so lifespan does not open the pool when Postgres is down.
+
+    Uses a short TCP ``connect_timeout`` (not the pool wait timeout).
+    """
+    global _db_reachable_cache
+    if _db_reachable_cache is not None:
+        return _db_reachable_cache
+    try:
+        import psycopg
+
+        with psycopg.connect(database_url, connect_timeout=connect_timeout) as conn:
+            conn.execute("SELECT 1")
+        _db_reachable_cache = True
+    except Exception:
+        _db_reachable_cache = False
+    return _db_reachable_cache
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Fail fast if secrets are missing / invalid (pool opens lazily on first query)
-    get_settings()
+    settings = get_settings()
     upload_root()
-    try:
-        recover_stuck_documents()
-    except Exception:
-        log.warning("Could not recover stuck documents (DB may be down)", exc_info=True)
+    if _db_reachable(settings.database_url):
+        try:
+            recover_stuck_documents()
+        except Exception:
+            log.warning("Could not recover stuck documents", exc_info=True)
+    else:
+        log.warning("Postgres unreachable at startup; skipping stuck-document recovery")
     yield
     shutdown_worker()
     db_pool.close_pool()

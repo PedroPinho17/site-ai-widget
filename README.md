@@ -61,6 +61,12 @@ Without a Groq key the API still starts; `/ask/docs` returns **503**
 `llm_not_configured` when it would call the LLM. Provider errors (timeouts,
 5xx, all keys rate-limited) return **503** `llm_unavailable`. A second key in
 `GROQ_API_KEY_FALLBACK` is tried only when the first one hits a 429 / quota.
+Chat requests use `LLM_TIMEOUT_SECONDS` (default 60).
+
+`uv run site-ai-widget-seed` finishes pending demo PDFs in-process. A demo
+document left in `processing` is only reset when `updated_at` is older than
+`DOCUMENT_STUCK_PROCESSING_SECONDS` (default 180), so a live API worker is not
+interrupted.
 
 Request bodies are capped before parsing: `POST /documents` at
 `MAX_UPLOAD_MB` + 1 MiB, every other route at 1 MiB (**413** `upload_too_large`).
