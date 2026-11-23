@@ -11,12 +11,13 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/opt/hf \
+    UPLOAD_DIR=/app/data/uploads
 
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-# Lockfile may be absent on first build; sync will resolve then
 COPY uv.lock* ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -f uv.lock ]; then uv sync --frozen --no-dev --no-install-project; \
@@ -24,17 +25,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY src ./src
 COPY db ./db
+COPY demo ./demo
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -f uv.lock ]; then uv sync --frozen --no-dev; \
     else uv sync --no-dev; fi
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN useradd --create-home --uid 1000 app \
+ && mkdir -p /app/data/uploads /opt/hf \
+ && chown -R app:app /app/data /opt/hf \
  && sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 USER app
 
 EXPOSE 8002
-HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=4)"
 
 ENTRYPOINT ["/entrypoint.sh"]

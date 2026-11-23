@@ -1,6 +1,7 @@
 # site-ai-widget
 
-Embeddable AI chat widget for company websites. **Phase 1** covers the panel API: auth, company settings, and widget keys (no public `/ask` yet).
+Embeddable AI chat widget for company websites. **Phase 2** adds company PDF
+documents and hybrid RAG Q&A on the panel API (no public widget embed yet).
 
 ## Requirements
 
@@ -18,7 +19,7 @@ uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 docker compose up -d db
 uv sync
 uv run site-ai-widget-migrate
-# optional demo companies (Mercearia Atlas / Oficina Lima):
+# optional demo companies + PDFs (Mercearia Atlas / Oficina Lima):
 uv run site-ai-widget-seed
 
 uv run uvicorn site_ai_widget.api.main:app --host 127.0.0.1 --port 8002
@@ -27,6 +28,9 @@ uv run uvicorn site_ai_widget.api.main:app --host 127.0.0.1 --port 8002
 - API: `http://127.0.0.1:8002` (`GET /health`)
 - Postgres: `127.0.0.1:5435` (not published on `0.0.0.0`)
 
+The **first** document processing run downloads `intfloat/multilingual-e5-small`
+once (Hugging Face cache). Compose mounts a named volume for that cache.
+
 Full stack (API + DB):
 
 ```bash
@@ -34,14 +38,32 @@ docker compose up --build
 ```
 
 `docker compose up --build` applies migrations but does **not** seed the demo
-companies. To seed them, set `RUN_SEED=1` (plus `DEMO_PASSWORD_ATLAS` /
-`DEMO_PASSWORD_LIMA`) in `.env`, or run `uv run site-ai-widget-seed` against the DB.
+companies or PDFs unless `RUN_SEED=1` is set (plus `DEMO_PASSWORD_ATLAS` /
+`DEMO_PASSWORD_LIMA`) in `.env`. You can also run `uv run site-ai-widget-seed`
+at any time, even while the API is running: the seed commits each demo PDF and
+processes it in its own process, returning only when it is `ready` or `failed`.
 
 > **`POSTGRES_PASSWORD` is applied only when the `pgdata` volume is first
 > created.** Changing it in `.env` later does not change the existing role's
-> password; the app then fails to connect. Either change it inside Postgres
+> password, and the app then fails to connect. Either change it inside Postgres
 > (`ALTER ROLE sitewidget PASSWORD '...'`) or recreate the volume with
-> `docker compose down -v` (this **deletes all data**).
+> `docker compose down -v`, which **deletes all data** (companies, users,
+> documents and chunks).
+
+### Upload a PDF and ask
+
+1. `POST /auth/login` → JWT.
+2. `POST /documents` (multipart, admin) → `202` with `status: pending`.
+3. Poll `GET /documents/{id}` until `status` is `ready` (or `failed`).
+4. `POST /ask/docs` with `{"question": "..."}` (set `GROQ_API_KEY` first).
+
+Without a Groq key the API still starts; `/ask/docs` returns **503**
+`llm_not_configured` when it would call the LLM. Provider errors (timeouts,
+5xx, all keys rate-limited) return **503** `llm_unavailable`. A second key in
+`GROQ_API_KEY_FALLBACK` is tried only when the first one hits a 429 / quota.
+
+Request bodies are capped before parsing: `POST /documents` at
+`MAX_UPLOAD_MB` + 1 MiB, every other route at 1 MiB (**413** `upload_too_large`).
 
 ### Client IP and proxies
 
@@ -58,11 +80,13 @@ the Docker bridge CIDR only when the proxy runs on it and is the only way in).
 ```bash
 uv run ruff check src tests
 uv run pytest tests/unit -q
-# with Postgres up:
+# with Postgres up (fake embedder, mocked LLM — no model download):
 uv run pytest tests -q
+# optional real-model retrieval checks:
+RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 ```
 
-## Phase 1 API (panel)
+## Phase 1–2 API (panel)
 
 | Method | Path | Notes |
 |--------|------|--------|
@@ -75,11 +99,18 @@ uv run pytest tests -q
 | GET/POST | `/widget-keys` | list / create (`wk_…`) |
 | PATCH | `/widget-keys/{id}` | `allowed_origins`, `is_active` |
 | POST | `/widget-keys/{id}/revoke` | deactivate |
+| POST | `/documents` | admin; PDF only (`%PDF-`); 202 pending |
+| GET | `/documents` | list |
+| GET | `/documents/{id}` | detail + chunk count |
+| DELETE | `/documents/{id}` | admin; removes file + chunks |
+| POST | `/ask/docs` | hybrid RAG answer + citations |
 
-Cross-company resources return **404** (not 403).
+Cross-company resources return **404** (not 403); that includes
+`/ask/docs` with another company's `document_ids`.
 
 Roles: `admin` can do everything above; `member` is read-only (writes to
-`/company`, `/company/widget-settings` and `/widget-keys` return **403**).
+`/company`, `/company/widget-settings`, `/widget-keys` and `/documents`
+return **403**). Members may still ask questions via `/ask/docs`.
 
 `allowed_origins` entries must be bare origins (`https://shop.example`,
 `http://localhost:3000`): no wildcards, paths, query, fragment or userinfo.

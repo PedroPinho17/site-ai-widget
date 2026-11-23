@@ -1,6 +1,6 @@
 [project]
 name = "site-ai-widget"
-version = "0.1.0"
+version = "0.2.0"
 description = "Embeddable AI chat widget for company websites (panel API + widget backend)"
 readme = "README.md"
 authors = [
@@ -11,11 +11,16 @@ dependencies = [
     "bcrypt>=5.0.0",
     "email-validator>=2.2.0",
     "fastapi>=0.163.1",
+    "openai>=1.0.0",
     "psycopg-pool>=3.2.6",
     "psycopg[binary]>=3.3.9",
     "pydantic-settings>=2.12.0",
     "pyjwt>=2.15.1",
+    "pypdf>=5.0.0",
     "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.9",
+    "sentence-transformers>=3.0.0",
+    "torch>=2.2.0",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -28,17 +33,29 @@ site-ai-widget-seed = "site_ai_widget.seed:main"
 requires = ["uv_build>=0.13.8,<0.14.0"]
 build-backend = "uv_build"
 
+# Linux Docker image: CPU-only torch (avoids multi-GB CUDA wheels).
+# Windows / macOS PyPI wheels are already CPU.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: needs Postgres running (docker compose up -d db)",
+    "model: needs the real embedding model (RUN_MODEL_TESTS=1)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [dependency-groups]
 dev = [
+    "fpdf2>=2.8.0",
     "httpx>=0.28.1",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",

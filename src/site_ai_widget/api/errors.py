@@ -35,12 +35,26 @@ MESSAGES = {
     "pw_same": "New password must differ from the current one.",
     "bad_origin": "Invalid origin URL.",
     "validation_error": "Invalid request.",
+    "not_pdf": "File is not a PDF (missing %PDF- signature).",
+    "upload_too_large": "File exceeds the maximum size of {n} MB.",
+    "pdf_encrypted": "Encrypted PDFs are not supported.",
+    "pdf_too_many_pages": "PDF has more than {n} pages.",
+    "pdf_corrupt": "Could not read this PDF.",
+    "document_duplicate": "This file was already uploaded.",
+    "question_too_long": "Question exceeds {n} characters.",
+    "llm_not_configured": "Document Q&A is not configured (missing LLM API key).",
+    "llm_unavailable": "The answer service is temporarily unavailable. Try again shortly.",
 }
 
 
 async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
+    detail: dict = {"code": exc.code, "message": exc.message}
+    # Safe extra fields for clients (never passwords / document text)
+    for key in ("document_id", "n"):
+        if key in exc.params:
+            detail[key] = exc.params[key]
     return JSONResponse(
         status_code=exc.status,
-        content={"detail": {"code": exc.code, "message": exc.message}},
+        content={"detail": detail},
         headers=exc.headers,
     )

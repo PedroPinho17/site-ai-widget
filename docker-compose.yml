@@ -23,8 +23,11 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Inside Compose, Postgres is reachable as hostname "db"
       DATABASE_URL: postgresql://sitewidget:${POSTGRES_PASSWORD}@db:5432/sitewidget
+      UPLOAD_DIR: /app/data/uploads
+      HF_HOME: /opt/hf
+      # 1 = seed demo companies + PDFs before uvicorn starts (shell or .env)
+      RUN_SEED: ${RUN_SEED:-0}
     depends_on:
       db:
         condition: service_healthy
@@ -34,6 +37,11 @@ services:
       # are ignored and rate limits key on the gateway IP. Only set
       # TRUSTED_PROXY_IPS when a real proxy/tunnel is the sole way in.
       - "127.0.0.1:${APP_PORT:-8002}:8002"
+    volumes:
+      - uploads:/app/data/uploads
+      - hf_cache:/opt/hf
 
 volumes:
   pgdata:
+  uploads:
+  hf_cache:

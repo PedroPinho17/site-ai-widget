@@ -12,29 +12,35 @@ from site_ai_widget.api.ratelimit import RateLimiter
 _settings = None
 auth_limiter: RateLimiter | None = None
 api_limiter: RateLimiter | None = None
+ask_limiter: RateLimiter | None = None
 
 
-def _ensure_limiters() -> tuple[RateLimiter, RateLimiter]:
-    global _settings, auth_limiter, api_limiter
+def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
+    global _settings, auth_limiter, api_limiter, ask_limiter
     settings = get_settings()
     if (
         auth_limiter is None
         or api_limiter is None
+        or ask_limiter is None
         or _settings is None
         or _settings.auth_rate_limit != settings.auth_rate_limit
         or _settings.api_rate_limit != settings.api_rate_limit
+        or _settings.ask_rate_limit != settings.ask_rate_limit
+        or _settings.ask_rate_limit_window != settings.ask_rate_limit_window
     ):
         auth_limiter = RateLimiter(settings.auth_rate_limit, settings.auth_rate_limit_window)
         api_limiter = RateLimiter(settings.api_rate_limit, settings.api_rate_limit_window)
+        ask_limiter = RateLimiter(settings.ask_rate_limit, settings.ask_rate_limit_window)
         _settings = settings
-    return auth_limiter, api_limiter
+    return auth_limiter, api_limiter, ask_limiter
 
 
 def reset_limiters() -> None:
     """Clear in-memory counters (tests)."""
-    global auth_limiter, api_limiter, _settings
+    global auth_limiter, api_limiter, ask_limiter, _settings
     auth_limiter = None
     api_limiter = None
+    ask_limiter = None
     _settings = None
 
 
@@ -46,7 +52,7 @@ def resolve_client_ip(request: Request) -> str:
 
 def require_auth_rate(request: Request) -> str:
     """Strict limit on login/register (per client IP)."""
-    limiter, _ = _ensure_limiters()
+    limiter, _, _ = _ensure_limiters()
     ip = resolve_client_ip(request)
     limiter.check(f"auth:{ip}")
     return ip
@@ -54,9 +60,17 @@ def require_auth_rate(request: Request) -> str:
 
 def require_api_rate(request: Request) -> str:
     """General API rate limit per client IP."""
-    _, limiter = _ensure_limiters()
+    _, limiter, _ = _ensure_limiters()
     ip = resolve_client_ip(request)
     limiter.check(f"api:{ip}")
+    return ip
+
+
+def require_ask_rate(request: Request) -> str:
+    """Document Q&A rate limit per client IP."""
+    _, _, limiter = _ensure_limiters()
+    ip = resolve_client_ip(request)
+    limiter.check(f"ask:{ip}")
     return ip
 
 

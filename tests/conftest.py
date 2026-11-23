@@ -19,6 +19,11 @@ os.environ.setdefault("AUTH_RATE_LIMIT", "1000")
 os.environ.setdefault("AUTH_RATE_LIMIT_WINDOW", "60")
 os.environ.setdefault("API_RATE_LIMIT", "1000")
 os.environ.setdefault("API_RATE_LIMIT_WINDOW", "60")
+os.environ.setdefault("ASK_RATE_LIMIT", "1000")
+os.environ.setdefault("ASK_RATE_LIMIT_WINDOW", "60")
+# Unit/CI must never download the embedding model
+os.environ.setdefault("SITE_AI_WIDGET_FAKE_EMBEDDER", "1")
+os.environ.setdefault("UPLOAD_DIR", "data/uploads-test")
 
 
 def postgres_available() -> bool:

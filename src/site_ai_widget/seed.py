@@ -1,17 +1,26 @@
-"""Seed two fictional demo companies (passwords from env only)."""
+"""Seed fictional demo companies and optional demo PDFs."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import shutil
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from site_ai_widget.api.auth import hash_password
 from site_ai_widget.db.pool import close_pool, connection
+from site_ai_widget.docs.process import process_document
+from site_ai_widget.docs.storage import new_storage_name, storage_path, upload_root
+from site_ai_widget.docs.validate import inspect_pdf
 
 load_dotenv()
 log = logging.getLogger("site_ai_widget")
+
+ROOT = Path(__file__).resolve().parents[2]
+DEMO_DIR = ROOT / "demo"
 
 DEMOS = (
     {
@@ -23,6 +32,8 @@ DEMOS = (
         "greeting": "Bem-vindo à Mercearia Atlas! Em que posso ajudar?",
         "assistant_name": "Atlas",
         "primary_color": "#0f766e",
+        "pdf": "mercearia-atlas-manual.pdf",
+        "pdf_display": "Mercearia Atlas - Manual do Cliente.pdf",
     },
     {
         "name": "Oficina Lima",
@@ -33,14 +44,114 @@ DEMOS = (
         "greeting": "Olá, aqui é a Oficina Lima. Como podemos ajudar?",
         "assistant_name": "Lima",
         "primary_color": "#b45309",
+        "pdf": "oficina-lima-manual.pdf",
+        "pdf_display": "Oficina Lima - Guia rapido.pdf",
     },
 )
 
 
-def seed(database_url: str | None = None) -> list[str]:
-    created: list[str] = []
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(65536), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _insert_demo_pdf(company_id, admin_id, demo: dict, database_url: str | None):
+    """Copy the demo PDF and COMMIT its ``documents`` row.
+
+    Returns ``(document_id, status)`` for the company's copy of this PDF (new or
+    existing), or ``None`` when the demo file is missing.
+    """
+    src = DEMO_DIR / demo["pdf"]
+    if not src.is_file():
+        log.warning("Demo PDF missing: %s (run scripts/make_demo_pdfs.py)", src)
+        return None
+    digest = _sha256_file(src)
     with connection(database_url) as conn:
-        for demo in DEMOS:
+        existing = conn.execute(
+            "SELECT id, status FROM documents WHERE company_id = %s AND sha256 = %s",
+            (str(company_id), digest),
+        ).fetchone()
+    if existing:
+        log.info("Demo PDF already present for %s (status=%s)", demo["slug"], existing[1])
+        return existing[0], existing[1]
+
+    upload_root()
+    storage_name = new_storage_name()
+    dest = storage_path(storage_name)
+    shutil.copy2(src, dest)
+    try:
+        from site_ai_widget.api.config import get_settings
+
+        page_count = inspect_pdf(dest, max_pages=get_settings().max_pdf_pages)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+
+    try:
+        # Own short transaction: the row is committed (visible to any worker,
+        # including a running API) before processing starts.
+        with connection(database_url) as conn:
+            row = conn.execute(
+                """
+                INSERT INTO documents (
+                    company_id, original_name, storage_name, size_bytes, sha256,
+                    page_count, status, created_by
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
+                RETURNING id
+                """,
+                (
+                    str(company_id),
+                    demo["pdf_display"],
+                    storage_name,
+                    dest.stat().st_size,
+                    digest,
+                    page_count,
+                    str(admin_id) if admin_id else None,
+                ),
+            ).fetchone()
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    log.info("Added demo PDF for %s (%s)", demo["slug"], demo["pdf"])
+    return row[0], "pending"
+
+
+def _document_status(document_id, database_url: str | None) -> str | None:
+    with connection(database_url) as conn:
+        row = conn.execute(
+            "SELECT status FROM documents WHERE id = %s", (str(document_id),)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _seed_pdf(company_id, admin_id, demo: dict, database_url: str | None = None) -> str | None:
+    """Insert (if needed) and process the demo PDF synchronously.
+
+    Runs in the seed process and returns only once the document is ``ready``
+    or ``failed`` — no background thread that dies with the process, and no
+    dependency on an API restart. ``process_document`` claims the row
+    atomically, so a running API worker cannot process it twice.
+    """
+    found = _insert_demo_pdf(company_id, admin_id, demo, database_url)
+    if found is None:
+        return None
+    doc_id, status = found
+    if status == "pending":
+        log.info("Processing demo PDF for %s ...", demo["slug"])
+        process_document(doc_id, company_id)
+        status = _document_status(doc_id, database_url)
+    log.info("Demo PDF for %s: %s", demo["slug"], status)
+    return status
+
+
+def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> list[str]:
+    created: list[str] = []
+    for demo in demos:
+        with connection(database_url) as conn:
             password = os.environ.get(demo["password_env"], "").strip()
             if not password:
                 raise SystemExit(
@@ -52,40 +163,49 @@ def seed(database_url: str | None = None) -> list[str]:
                 (demo["slug"],),
             ).fetchone()
             if existing:
+                company_id = existing[0]
                 log.info("Skip existing company %s", demo["slug"])
-                continue
-            company = conn.execute(
-                """
-                INSERT INTO companies (name, slug, default_locale)
-                VALUES (%s, %s, %s)
-                RETURNING id
-                """,
-                (demo["name"], demo["slug"], demo["locale"]),
+            else:
+                company = conn.execute(
+                    """
+                    INSERT INTO companies (name, slug, default_locale)
+                    VALUES (%s, %s, %s)
+                    RETURNING id
+                    """,
+                    (demo["name"], demo["slug"], demo["locale"]),
+                ).fetchone()
+                company_id = company[0]
+                conn.execute(
+                    """
+                    INSERT INTO users (company_id, email, password_hash, role)
+                    VALUES (%s, %s, %s, 'admin')
+                    """,
+                    (company_id, demo["email"], hash_password(password)),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO widget_settings
+                        (company_id, primary_color, greeting, locale, assistant_name)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        company_id,
+                        demo["primary_color"],
+                        demo["greeting"],
+                        demo["locale"],
+                        demo["assistant_name"],
+                    ),
+                )
+                created.append(demo["slug"])
+                log.info("Created company %s (%s)", demo["name"], demo["email"])
+
+            admin = conn.execute(
+                "SELECT id FROM users WHERE company_id = %s AND role = 'admin' LIMIT 1",
+                (str(company_id),),
             ).fetchone()
-            company_id = company[0]
-            conn.execute(
-                """
-                INSERT INTO users (company_id, email, password_hash, role)
-                VALUES (%s, %s, %s, 'admin')
-                """,
-                (company_id, demo["email"], hash_password(password)),
-            )
-            conn.execute(
-                """
-                INSERT INTO widget_settings
-                    (company_id, primary_color, greeting, locale, assistant_name)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (
-                    company_id,
-                    demo["primary_color"],
-                    demo["greeting"],
-                    demo["locale"],
-                    demo["assistant_name"],
-                ),
-            )
-            created.append(demo["slug"])
-            log.info("Created company %s (%s)", demo["name"], demo["email"])
+            admin_id = admin[0] if admin else None
+        # Company transaction is committed here; the PDF gets its own.
+        _seed_pdf(company_id, admin_id, demo, database_url)
     return created
 
 
@@ -96,7 +216,10 @@ def main() -> None:
         print("DATABASE_URL is required", file=sys.stderr)
         raise SystemExit(1)
     created = seed(url)
-    print(f"OK seed: {len(created)} company(ies)" + (f" ({', '.join(created)})" if created else " (all existed)"))
+    print(
+        f"OK seed: {len(created)} company(ies)"
+        + (f" ({', '.join(created)})" if created else " (all existed)")
+    )
     close_pool()
 
 

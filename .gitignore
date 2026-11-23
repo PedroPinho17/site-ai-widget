@@ -27,10 +27,17 @@ db/backups/
 *.sql.zip
 # Any SQL file is ignored by default (dumps, pg_dump output, ad-hoc exports)...
 *.sql
-# ...except the tracked reference schema and versioned migrations.
+# ...except the tracked reference schema and versioned / repeatable migrations.
 !db/schema.sql
 !db/migrations/
 !db/migrations/V*.sql
+!db/migrations/R__*.sql
+
+# Local uploads and embedding model cache
+data/uploads*/
+data/hf/
+.cache/
+hf_cache/
 
 # Editors / OS
 .vscode/
