@@ -171,6 +171,59 @@ def test_plain_operators_still_pass():
 @pytest.mark.parametrize(
     "sql",
     [
+        "SELECT name FROM products WHERE name <-> 'x' < 1",
+        "SELECT name FROM products WHERE name % 'x'",
+        "SELECT name FROM products WHERE price % 2 = 0",
+        "SELECT name FROM products WHERE price # 1 > 0",
+        "SELECT name FROM products WHERE price & 1 = 1",
+        "SELECT name FROM products WHERE price ^ 2 > 1",
+        'SELECT name FROM products WHERE name COLLATE "C"',
+        "SELECT substring(name FROM '(a+)+b') FROM products",
+        "SELECT substring(name FROM name) FROM products",
+    ],
+)
+def test_disallowed_binary_ops_and_regex_substring_are_rejected(sql):
+    expected = (
+        "function_not_allowed" if "substring" in sql.lower() else "operator_not_allowed"
+    )
+    assert reason(sql) == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name || 'x' FROM products",
+        "SELECT price + 1 - 2 * 3 / 4 FROM products",
+        "SELECT name FROM products WHERE name = 'x'",
+        "SELECT name FROM products WHERE name <> 'x'",
+        "SELECT name FROM products WHERE price < 1",
+        "SELECT name FROM products WHERE price <= 1",
+        "SELECT name FROM products WHERE price > 1",
+        "SELECT name FROM products WHERE price >= 1",
+        "SELECT name FROM products WHERE name LIKE 'a%'",
+        "SELECT name FROM products WHERE name ILIKE 'a%'",
+        "SELECT name FROM products WHERE name NOT LIKE 'a%'",
+        r"SELECT name FROM products WHERE name LIKE 'a\%' ESCAPE '\'",
+        "SELECT name FROM products WHERE name IN ('a', 'b')",
+        "SELECT name FROM products WHERE price BETWEEN 1 AND 10",
+        "SELECT name FROM products WHERE name IS NULL",
+        "SELECT name FROM products WHERE name IS NOT DISTINCT FROM 'x'",
+        "SELECT name FROM products WHERE name = 'x' AND price > 1 OR price < 0",
+        "SELECT name FROM products WHERE NOT name IS NULL",
+        "SELECT name FROM products WHERE price > ALL (SELECT price FROM products)",
+        "SELECT name FROM products WHERE price = ANY (SELECT price FROM products)",
+        "SELECT CASE WHEN price > 0 THEN name ELSE sku END FROM products",
+        "SELECT substring(name FROM 2 FOR 3) FROM products",
+        "SELECT substring(name, 2, 3) FROM products",
+    ],
+)
+def test_allowed_operators_and_safe_substring_still_pass(sql):
+    assert validate_sql(sql, ALLOWED)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
         "SELECT 'pg_roles'::regclass FROM products",
         "SELECT 1::oid FROM products",
     ],

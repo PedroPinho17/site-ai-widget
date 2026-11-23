@@ -112,6 +112,32 @@ ALLOWED_ANONYMOUS: frozenset[str] = frozenset(
     }
 )
 
+# Binary operators that may reach Postgres. Exact type match only (no subclasses).
+# exp.Dot / exp.Operator are also Binary but keep their own checks and reasons.
+ALLOWED_OPERATORS: frozenset[type[exp.Expression]] = frozenset(
+    {
+        exp.Add,
+        exp.Sub,
+        exp.Mul,
+        exp.Div,
+        exp.DPipe,
+        exp.EQ,
+        exp.NEQ,
+        exp.GT,
+        exp.GTE,
+        exp.LT,
+        exp.LTE,
+        exp.NullSafeEQ,
+        exp.NullSafeNEQ,
+        exp.Like,
+        exp.ILike,
+        exp.Escape,
+        exp.Is,
+        exp.And,
+        exp.Or,
+    }
+)
+
 ALLOWED_CAST_TYPES: frozenset[str] = frozenset(
     {
         "bigint",
@@ -414,12 +440,14 @@ def _fold_ident(node: exp.Expression | None) -> str | None:
 
 
 def _check_functions(query: exp.Expression) -> None:
-    # OPERATOR(schema.op) is exp.Operator, not exp.Func — it would run any operator.
+    # OPERATOR(schema.op) is exp.Operator (also Binary) — check before the Binary allowlist
+    # so the reason stays operator_not_allowed, not a generic binary rejection.
     if any(query.find_all(exp.Operator)):
         raise SQLRejected("operator_not_allowed", "OPERATOR(...) is not allowed.")
     # SIMILAR TO is regex-like (same class of risk as ~); not a Func node.
     if any(query.find_all(exp.SimilarTo)):
         raise SQLRejected("function_not_allowed", "SIMILAR TO is not allowed.")
+    _check_binary_operators(query)
     for func in query.find_all(exp.Func):
         # schema.func(...) parses as Dot(schema, func): it would run whatever function
         # of that name exists in that schema, so the name allowlist does not apply.
@@ -433,6 +461,34 @@ def _check_functions(query: exp.Expression) -> None:
         if type(func) not in ALLOWED_FUNCTIONS:
             label = func.sql_name().lower() if hasattr(func, "sql_name") else type(func).__name__
             raise SQLRejected("function_not_allowed", f"Function {label} is not allowed.")
+        if isinstance(func, exp.Substring):
+            _check_substring_bounds(func)
+
+
+def _check_binary_operators(query: exp.Expression) -> None:
+    """Reject Binary nodes outside ALLOWED_OPERATORS (custom ops, regex distance, …)."""
+    for node in query.find_all(exp.Binary):
+        # Dot keeps field_access_not_allowed / schema-qualified function_not_allowed.
+        if type(node) is exp.Dot:
+            continue
+        if type(node) not in ALLOWED_OPERATORS:
+            raise SQLRejected(
+                "operator_not_allowed",
+                f"Operator {type(node).__name__} is not allowed.",
+            )
+
+
+def _check_substring_bounds(node: exp.Substring) -> None:
+    """Postgres substring(x FROM 'pattern') is POSIX regex — only digit literals for bounds."""
+    for key in ("start", "length"):
+        arg = node.args.get(key)
+        if arg is None:
+            continue
+        if _integer_limit(arg) is None:
+            raise SQLRejected(
+                "function_not_allowed",
+                "substring start/length must be integer literals.",
+            )
 
 
 def _check_casts(query: exp.Expression) -> None:
