@@ -17,12 +17,13 @@ api_limiter: RateLimiter | None = None
 ask_limiter: RateLimiter | None = None
 widget_key_limiter: RateLimiter | None = None
 widget_lookup_limiter: RateLimiter | None = None
+assistant_test_limiter: RateLimiter | None = None
 _widget_charge_lock = Lock()
 
 
 def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
     global _settings, auth_limiter, api_limiter, ask_limiter, widget_key_limiter
-    global widget_lookup_limiter
+    global widget_lookup_limiter, assistant_test_limiter
     settings = get_settings()
     if (
         auth_limiter is None
@@ -30,7 +31,10 @@ def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
         or ask_limiter is None
         or widget_key_limiter is None
         or widget_lookup_limiter is None
+        or assistant_test_limiter is None
         or _settings is None
+        or _settings.assistant_test_rate_limit != settings.assistant_test_rate_limit
+        or _settings.assistant_test_rate_limit_window != settings.assistant_test_rate_limit_window
         or _settings.widget_lookup_rate_limit != settings.widget_lookup_rate_limit
         or _settings.widget_lookup_rate_limit_window != settings.widget_lookup_rate_limit_window
         or _settings.auth_rate_limit != settings.auth_rate_limit
@@ -49,6 +53,9 @@ def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
         widget_lookup_limiter = RateLimiter(
             settings.widget_lookup_rate_limit, settings.widget_lookup_rate_limit_window
         )
+        assistant_test_limiter = RateLimiter(
+            settings.assistant_test_rate_limit, settings.assistant_test_rate_limit_window
+        )
         _settings = settings
     return auth_limiter, api_limiter, ask_limiter
 
@@ -56,12 +63,13 @@ def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
 def reset_limiters() -> None:
     """Clear in-memory counters (tests)."""
     global auth_limiter, api_limiter, ask_limiter, widget_key_limiter, _settings
-    global widget_lookup_limiter
+    global widget_lookup_limiter, assistant_test_limiter
     auth_limiter = None
     api_limiter = None
     ask_limiter = None
     widget_key_limiter = None
     widget_lookup_limiter = None
+    assistant_test_limiter = None
     _settings = None
     from site_ai_widget.api.routes.db_connection import reset_db_connection_limiters
 
@@ -143,6 +151,21 @@ def charge_widget_lookup(request: Request) -> str:
     ip = resolve_client_ip(request)
     limiter.check(f"widget-lookup:{ip}")
     return ip
+
+
+def require_assistant_test_rate(user: dict = Depends(current_user)) -> dict:
+    """Panel Test assistant: one slot per message in a per-user bucket.
+
+    Keyed by the signed-in user id, so an admin testing the assistant never
+    spends (or is blocked by) the per-IP ask bucket that widget visitors use,
+    nor the introspect or probe buckets.
+    """
+    _ensure_limiters()
+    limiter = assistant_test_limiter
+    if limiter is None:
+        raise RuntimeError("assistant test limiter was not initialised")
+    limiter.check(f"assistant-test:{user['id']}")
+    return user
 
 
 def charge_widget_history(request: Request) -> str:

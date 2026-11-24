@@ -60,7 +60,8 @@ _SYSTEM = (
     "You are a helpful shop assistant chat widget. "
     "Write 1-2 short, friendly sentences in {lang_name} only. "
     "Use ONLY the JSON rows in the user message for facts (prices, names, amounts). "
-    "Copy every name and number exactly as written in the rows, and mention every row. "
+    "Copy every JSON value exactly as written, including the decimal mark, spaces and "
+    "any currency symbol. Do not reformat an amount. Mention every row. "
     "You may repeat the subject of the visitor question for natural wording "
     "(e.g. olive oil / azeite), but never invent products, prices, discounts, "
     "currency, units, links or contact details that are not in the rows. "
@@ -252,6 +253,22 @@ def _currency_symbols_ok(text: str, currency: str | None) -> bool:
     return not ("$" in rest and code != "USD")
 
 
+def _amounts_only_as_formatted(text: str, numeric_values: list[str]) -> bool:
+    """Blank out each exact formatted value; nothing of it may be left over.
+
+    Longest values first, so "18,49 €" is removed before "8,49 €" could match
+    inside it. Leftover digits of those numbers or a leftover currency symbol
+    mean the reply wrote an amount in some other format.
+    """
+    rest = text
+    for value in sorted(set(numeric_values), key=len, reverse=True):
+        rest = rest.replace(value, " ")
+    if any(symbol in rest for symbol in ("€", "£", "$")):
+        return False
+    numbers = {n for value in numeric_values for n in _NUMBER.findall(value)}
+    return not any(match in numbers for match in _NUMBER.findall(rest))
+
+
 def _no_new_units(text: str, source: str) -> bool:
     """No currency word or code, and no unit after a number, unless the rows have it."""
     folded_source = source.casefold()
@@ -299,13 +316,21 @@ def _llm_answer_ok(
             return False
     if not _currency_symbols_ok(cleaned, currency):
         return False
+    # The formatted amount must appear unchanged ("8,49 €", not "8.49€" or "8,49€"),
+    # and every other mention of that number must be gone too: "8,49 € (8,49€)"
+    # would otherwise pass because the right form appears once.
+    folded = cleaned.casefold()
+    numeric_values = [value.strip() for value in values if _NUMERIC_CELL.match(value.strip())]
+    if any(value.casefold() not in folded for value in numeric_values):
+        return False
+    if not _amounts_only_as_formatted(cleaned, numeric_values):
+        return False
     if not _no_new_units(cleaned, source):
         return False
     links = {_strip_link(match) for match in _LINK.findall(source)}
     if any(_strip_link(match) not in links for match in _LINK.findall(cleaned)):
         return False
     # Every non-numeric value we sent must appear, so a reply cannot rename the product.
-    folded = cleaned.casefold()
     text_values = [value for value in values if not _NUMERIC_CELL.match(value.strip())]
     return all(value.casefold() in folded for value in text_values)
 

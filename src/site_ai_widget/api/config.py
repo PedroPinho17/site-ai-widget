@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Per public widget key. At least 3, same floor as the ask bucket.
     widget_key_rate_limit: int = Field(default=60, ge=3)
     widget_key_rate_limit_window: int = Field(default=60, ge=1)
+    # Panel Test assistant: per signed-in user, its own bucket (never the
+    # per-IP ask bucket that widget visitors and /ask share).
+    assistant_test_rate_limit: int = Field(default=30, ge=1)
+    assistant_test_rate_limit_window: int = Field(default=60, ge=1)
     # Per IP, every /v1/widget/* request (preflight included), charged before the
     # key/origin database lookup so random keys cannot tie up the pool.
     widget_lookup_rate_limit: int = Field(default=300, ge=1)

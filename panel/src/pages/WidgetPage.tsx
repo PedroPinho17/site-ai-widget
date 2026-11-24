@@ -17,6 +17,7 @@ export function WidgetPage() {
   const settings = useQuery({ queryKey: ["widget-settings"], queryFn: widgetSettingsRequest });
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
   const value = draft ?? settings.data?.currency ?? "";
 
   const save = useMutation({
@@ -24,9 +25,11 @@ export function WidgetPage() {
     onSuccess: async () => {
       setDraft(null);
       setError("");
+      setSaved(true);
       await queryClient.invalidateQueries({ queryKey: ["widget-settings"] });
     },
     onError: (err: unknown) => {
+      setSaved(false);
       setError(err instanceof ApiRequestError ? err.message : "Could not save.");
     },
   });
@@ -40,7 +43,10 @@ export function WidgetPage() {
           id="currency"
           className="rounded-md border border-border bg-card px-3 py-2"
           value={value}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setSaved(false);
+          }}
         >
           {OPTIONS.map((option) => (
             <option key={option.label} value={option.value}>
@@ -49,6 +55,11 @@ export function WidgetPage() {
           ))}
         </select>
       </label>
+      {saved ? (
+        <p role="status" className="text-sm text-green-800">
+          Saved ✓
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="text-sm text-red-700">
           {error}

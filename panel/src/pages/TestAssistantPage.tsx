@@ -66,6 +66,10 @@ export function TestAssistantPage() {
         },
       ]);
     } catch (err) {
+      // Keep what the admin typed and drop the unsent bubble, so a retry
+      // (for example after a 429) is one click and does not duplicate it.
+      setMessages((current) => current.filter((message) => message.id !== userId));
+      setText(trimmed);
       setError(err instanceof ApiRequestError ? err.message : "Could not send.");
     } finally {
       setBusy(false);

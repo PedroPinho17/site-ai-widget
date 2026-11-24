@@ -295,6 +295,7 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | PUT | `/db-connection/schema/approval` | approve tables for the widget |
 | POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |
 | POST | `/ask/docs` | hybrid RAG answer + citations (docs only) |
+| POST | `/assistant/test` | panel Test assistant; not stored; `ASSISTANT_TEST_RATE_LIMIT` per user (default **30 per minute**), separate from widget visitors |
 | GET | `/embed.js` | widget script (`application/javascript`) |
 | POST | `/v1/widget/{key}/ask` | public; origin allowlist; returns `session_token` |
 | POST | `/v1/widget/{key}/history` | public; last 50 messages for that session |

@@ -143,3 +143,69 @@ def test_test_chats_are_not_stored_as_visitor_conversations(assistant_app, monke
     for question in ("Qual o preço do azeite?", "Olá"):
         assert client.post("/assistant/test", json={"question": question, "lang": "pt"}).status_code == 200
     assert counts() == before
+
+
+# --- rate limit: per user, separate from widget visitors ---------------------
+
+
+def _limits(monkeypatch, **env: str) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    clear_settings_cache()
+    reset_limiters()
+
+
+def test_ten_quick_test_messages_from_one_admin_succeed(assistant_app, monkeypatch):
+    """Regression: the 2nd message returned 429 because it shared the per-IP ask bucket."""
+    client, _, holder = assistant_app
+    # The smallest allowed visitor ask bucket (3 slots = one /ask) must not matter here.
+    _limits(monkeypatch, ASK_RATE_LIMIT="3")
+    holder["who"] = "a"
+    statuses = [
+        client.post("/assistant/test", json={"question": "Olá", "lang": "pt"}).status_code
+        for _ in range(10)
+    ]
+    assert statuses == [200] * 10
+
+
+def test_test_limit_is_per_user_and_never_touches_the_visitor_bucket(assistant_app, monkeypatch):
+    from site_ai_widget.api import deps
+
+    client, _, holder = assistant_app
+    _limits(monkeypatch, ASSISTANT_TEST_RATE_LIMIT="3")
+    holder["who"] = "a"
+    for _ in range(3):
+        assert client.post("/assistant/test", json={"question": "Olá"}).status_code == 200
+    blocked = client.post("/assistant/test", json={"question": "Olá"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "rate_limited"
+    assert "Retry-After" in blocked.headers
+    # Another admin has their own bucket.
+    holder["who"] = "b"
+    assert client.post("/assistant/test", json={"question": "Olá"}).status_code == 200
+    # Nothing was charged to the per-IP bucket widget visitors and /ask use.
+    assert deps.ask_limiter is not None
+    assert not any(key.startswith("ask:") for key in deps.ask_limiter._calls)
+
+
+def test_busy_widget_visitors_do_not_block_the_admin(assistant_app, monkeypatch):
+    from site_ai_widget.api import deps
+    from site_ai_widget.api.errors import ApiError
+
+    client, _, holder = assistant_app
+    _limits(monkeypatch, ASK_RATE_LIMIT="3")
+    deps._ensure_limiters()
+    # Fill the per-IP visitor bucket for the test client.
+    with pytest.raises(ApiError):
+        for _ in range(10):
+            deps.ask_limiter.check("ask:testclient", n=3)
+    holder["who"] = "a"
+    assert client.post("/assistant/test", json={"question": "Olá"}).status_code == 200
+
+
+def test_default_test_limit_is_thirty_per_minute():
+    from site_ai_widget.api.config import Settings
+
+    fields = Settings.model_fields
+    assert fields["assistant_test_rate_limit"].default == 30
+    assert fields["assistant_test_rate_limit_window"].default == 60
