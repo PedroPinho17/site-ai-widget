@@ -70,27 +70,11 @@ def update_company(
     )
 
 
-@router.get("/widget-settings", response_model=WidgetSettingsResponse)
-def get_widget_settings(user: dict = Depends(panel_user)) -> WidgetSettingsResponse:
-    with connection() as conn:
-        row = conn.execute(
-            """
-            SELECT company_id, primary_color, greeting, locale, position, assistant_name, currency
-            FROM widget_settings WHERE company_id = %s
-            """,
-            (str(user["company_id"]),),
-        ).fetchone()
-    if not row:
-        raise ApiError("not_found", 404)
-    return WidgetSettingsResponse(
-        company_id=row[0],
-        primary_color=row[1],
-        greeting=row[2],
-        locale=row[3],
-        position=row[4],
-        assistant_name=row[5],
-        currency=row[6],
-    )
+_SETTINGS_COLS = (
+    "company_id, primary_color, greeting, locale, position, assistant_name, currency, "
+    "show_suggestions, show_fullscreen, allow_visitor_documents, "
+    "conversation_retention_days, suggested_questions"
+)
 
 
 def _settings_from_row(row) -> WidgetSettingsResponse:
@@ -102,7 +86,24 @@ def _settings_from_row(row) -> WidgetSettingsResponse:
         position=row[4],
         assistant_name=row[5],
         currency=row[6],
+        show_suggestions=bool(row[7]),
+        show_fullscreen=bool(row[8]),
+        allow_visitor_documents=bool(row[9]),
+        conversation_retention_days=int(row[10] or 30),
+        suggested_questions=list(row[11] or []),
     )
+
+
+@router.get("/widget-settings", response_model=WidgetSettingsResponse)
+def get_widget_settings(user: dict = Depends(panel_user)) -> WidgetSettingsResponse:
+    with connection() as conn:
+        row = conn.execute(
+            f"SELECT {_SETTINGS_COLS} FROM widget_settings WHERE company_id = %s",
+            (str(user["company_id"]),),
+        ).fetchone()
+    if not row:
+        raise ApiError("not_found", 404)
+    return _settings_from_row(row)
 
 
 @router.patch("/widget-settings", response_model=WidgetSettingsResponse)
@@ -110,12 +111,36 @@ def update_widget_settings(
     body: WidgetSettingsUpdate,
     user: dict = Depends(require_admin),
 ) -> WidgetSettingsResponse:
-    # currency may be cleared (null). Other fields ignore null.
+    # currency may be cleared (null). suggested_questions null means "clear"
+    # (the column is NOT NULL). Other fields ignore null.
     raw = body.model_dump(exclude_unset=True)
-    changes = {key: value for key, value in raw.items() if value is not None or key == "currency"}
+    nullable = {"currency", "suggested_questions"}
+    changes = {key: value for key, value in raw.items() if value is not None or key in nullable}
+    if "suggested_questions" in changes:
+        questions = changes["suggested_questions"] or []
+        changes["suggested_questions"] = questions
+        # Admin-typed questions survive document upload/delete; an empty list
+        # hands the cache back to automatic generation.
+        changes["suggestions_manual"] = bool(questions)
     if not changes:
         return get_widget_settings(user)
-    cols = list(changes)
+    allowed = {
+        "primary_color",
+        "greeting",
+        "locale",
+        "position",
+        "assistant_name",
+        "currency",
+        "show_suggestions",
+        "show_fullscreen",
+        "allow_visitor_documents",
+        "conversation_retention_days",
+        "suggested_questions",
+        "suggestions_manual",
+    }
+    cols = [c for c in changes if c in allowed]
+    if not cols:
+        return get_widget_settings(user)
     sets = ", ".join(f"{c} = %s" for c in cols)
     params = [changes[c] for c in cols]
     params.append(str(user["company_id"]))
@@ -124,7 +149,7 @@ def update_widget_settings(
             f"""
             UPDATE widget_settings SET {sets}
             WHERE company_id = %s
-            RETURNING company_id, primary_color, greeting, locale, position, assistant_name, currency
+            RETURNING {_SETTINGS_COLS}
             """,
             params,
         ).fetchone()

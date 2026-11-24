@@ -142,9 +142,17 @@ def resolve_session(company_id: str, presented: str | None) -> tuple[str, str]:
     return fresh, created[0]
 
 
-def append_turn(session_id: str, company_id: str, question: str, result: AskResponse) -> None:
+def append_turn(
+    session_id: str,
+    company_id: str,
+    question: str,
+    result: AskResponse,
+    *,
+    lang: str | None = None,
+) -> None:
     """Store the visitor question and the public answer. Never stores SQL."""
     assistant_text = result.answer if result.answer is not None else result.message
+    unanswered = result.mode == "none"
     with connection() as conn:
         conn.execute(
             """
@@ -156,19 +164,38 @@ def append_turn(session_id: str, company_id: str, question: str, result: AskResp
         conn.execute(
             """
             INSERT INTO visitor_messages
-                (session_id, company_id, role, text, mode, row_count)
-            VALUES (%s, %s, 'assistant', %s, %s, %s)
+                (session_id, company_id, role, text, mode, row_count, unanswered, elapsed_ms)
+            VALUES (%s, %s, 'assistant', %s, %s, %s, %s, %s)
             """,
-            (session_id, str(company_id), assistant_text, result.mode, result.row_count),
+            (
+                session_id,
+                str(company_id),
+                assistant_text,
+                result.mode,
+                result.row_count,
+                unanswered,
+                result.elapsed_ms,
+            ),
         )
-        conn.execute(
-            """
-            UPDATE visitor_sessions
-            SET last_seen = clock_timestamp()
-            WHERE id = %s AND company_id = %s
-            """,
-            (session_id, str(company_id)),
-        )
+        if lang in ("pt", "en"):
+            conn.execute(
+                """
+                UPDATE visitor_sessions
+                SET last_seen = clock_timestamp(),
+                    lang = COALESCE(lang, %s)
+                WHERE id = %s AND company_id = %s
+                """,
+                (lang, session_id, str(company_id)),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE visitor_sessions
+                SET last_seen = clock_timestamp()
+                WHERE id = %s AND company_id = %s
+                """,
+                (session_id, str(company_id)),
+            )
 
 
 def load_history(company_id: str, token: str) -> list[dict]:

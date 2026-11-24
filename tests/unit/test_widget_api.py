@@ -147,7 +147,7 @@ def _assert_cors(response, origin: str) -> None:
     assert response.headers["access-control-allow-origin"] == origin
     assert response.headers["access-control-allow-origin"] != "*"
     assert "access-control-allow-credentials" not in response.headers
-    assert response.headers["access-control-allow-methods"] == "POST"
+    assert "POST" in response.headers["access-control-allow-methods"]
     assert response.headers["access-control-allow-headers"].lower() == "content-type"
     assert response.headers["access-control-max-age"] == "600"
     assert "origin" in response.headers["vary"].lower()

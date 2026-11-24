@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import { Navigate } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthProvider";
+import { useI18n } from "@/i18n/useI18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import { ApiRequestError } from "@/lib/api";
 import { getToken } from "@/lib/session";
 
 export function LoginPage() {
+  const { t } = useI18n();
   const { login, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,11 +38,11 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
-        <CardTitle>Sign in</CardTitle>
-        <p className="mt-1 text-sm text-muted-foreground">Admin panel for your company widget.</p>
+        <CardTitle>{t("login.title")}</CardTitle>
+        <p className="mt-1 text-sm text-muted-foreground">{t("login.subtitle")}</p>
         <form className="mt-5 flex flex-col gap-3" onSubmit={onSubmit}>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("login.email")}</Label>
             <Input
               id="email"
               type="email"
@@ -51,7 +53,7 @@ export function LoginPage() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t("login.password")}</Label>
             <Input
               id="password"
               type="password"
@@ -67,7 +69,7 @@ export function LoginPage() {
             </p>
           ) : null}
           <Button type="submit" disabled={pending}>
-            {pending ? "Signing in…" : "Sign in"}
+            {pending ? t("login.pending") : t("login.submit")}
           </Button>
         </form>
       </Card>

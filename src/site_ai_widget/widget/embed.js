@@ -59,6 +59,7 @@
   };
 
   var key = (script.getAttribute("data-key") || "").trim();
+  var previewMode = script.getAttribute("data-preview") === "1";
   var lang = resolveLang(script.getAttribute("data-lang"));
   /* Language of the last answer, as decided by the server. The widget never
      guesses a language itself; it only sends this back for short follow-ups. */
@@ -66,6 +67,62 @@
   var copy = STRINGS[lang];
   var apiBase = apiBaseFrom(script.src || "");
   var storageKey = "site-ai-widget:" + key + ":session";
+  var themeColor = hexColor(script.getAttribute("data-color")) || "#0f766e";
+  var panelPosition = normalizePosition(script.getAttribute("data-position"));
+  var showFullscreen = script.getAttribute("data-fullscreen") !== "0";
+  var allowVisitorDocs = script.getAttribute("data-allow-docs") === "1";
+  var openOnMount = script.getAttribute("data-open") === "1";
+  applyCopyOverrides(script);
+
+  function hexColor(value) {
+    var text = String(value || "").trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(text)) {
+      return text.toLowerCase();
+    }
+    return "";
+  }
+
+  function normalizePosition(value) {
+    var text = String(value || "").trim().toLowerCase();
+    if (text === "left" || text === "bottom-left") {
+      return "bottom-left";
+    }
+    return "bottom-right";
+  }
+
+  function applyCopyOverrides(el) {
+    var title = (el.getAttribute("data-title") || "").trim();
+    var greeting = (el.getAttribute("data-greeting") || "").trim();
+    var rawSuggestions = (el.getAttribute("data-suggestions") || "").trim();
+    if (title) {
+      copy.title = title;
+    }
+    if (greeting) {
+      copy.greeting = greeting;
+    }
+    if (rawSuggestions) {
+      try {
+        var parsed = JSON.parse(rawSuggestions);
+        if (Array.isArray(parsed) && parsed.length) {
+          var next = [];
+          for (var i = 0; i < parsed.length && i < 6; i++) {
+            var item = String(parsed[i] || "").trim();
+            if (item) {
+              next.push(item.slice(0, 80));
+            }
+          }
+          if (next.length) {
+            copy.suggestions = next;
+          }
+        }
+      } catch (err) {
+        /* Ignore invalid JSON from the host attribute. */
+      }
+    }
+    if (el.getAttribute("data-suggestions-off") === "1") {
+      copy.suggestions = [];
+    }
+  }
 
   function resolveLang(attr) {
     var given = String(attr || "").trim().toLowerCase();
@@ -221,7 +278,7 @@
 
   /* Chips under the bubble: document sources only (table names are schema
      text and never shown to visitors). Greetings get none. textContent only. */
-  function sourceChips(data) {
+  function sourceChipItems(data) {
     var chips = [];
     if (!data || data.mode === "chat") {
       return chips;
@@ -235,9 +292,22 @@
       }
       var page = cellText(src.page);
       var label = copy.sourceDoc + ": " + name;
-      chips.push(page ? label + " " + copy.sourcePage + " " + page : label);
+      chips.push({
+        label: page ? label + " " + copy.sourcePage + " " + page : label,
+        documentId: cellText(src.document_id),
+        page: src.page
+      });
     }
     return chips;
+  }
+
+  function sourceChips(data) {
+    var items = sourceChipItems(data);
+    var labels = [];
+    for (var i = 0; i < items.length; i++) {
+      labels.push(items[i].label);
+    }
+    return labels;
   }
 
   /* Prefer the stored assistant text (same string the visitor saw). */
@@ -343,6 +413,10 @@
          element.shadowRoot. */
       var root = this.attachShadow({ mode: "closed" });
       applyStyles(root);
+      this.style.setProperty("--sai-color", themeColor);
+      if (panelPosition === "bottom-left") {
+        this.classList.add("is-left");
+      }
 
       var panel = document.createElement("section");
       panel.className = "panel";
@@ -375,7 +449,9 @@
       closeBtn.setAttribute("aria-label", copy.close);
       closeBtn.textContent = "\u00d7";
       closeBtn.addEventListener("click", () => this.close());
-      actions.appendChild(expandBtn);
+      if (showFullscreen) {
+        actions.appendChild(expandBtn);
+      }
       actions.appendChild(closeBtn);
       header.appendChild(brand);
       header.appendChild(actions);
@@ -459,6 +535,110 @@
       this._bubble = bubble;
       this._renderCount();
       this._sync();
+      if (!previewMode) {
+        this._loadConfig();
+      } else if (openOnMount) {
+        this.open();
+      }
+    }
+
+    _loadConfig() {
+      if (!key || !apiBase) {
+        return;
+      }
+      var self = this;
+      fetch(apiBase + widgetPath("config"), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        credentials: "omit"
+      })
+        .then(function (res) {
+          return readJson(res).then(function (data) {
+            return { status: res.status, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!self.isConnected || errorKind(result.status, result.data) !== "ok") {
+            return;
+          }
+          var data = result.data || {};
+          if (hexColor(data.primary_color)) {
+            themeColor = hexColor(data.primary_color);
+            self.style.setProperty("--sai-color", themeColor);
+          }
+          panelPosition = normalizePosition(data.position);
+          self.classList.toggle("is-left", panelPosition === "bottom-left");
+          if (data.assistant_name) {
+            copy.title = String(data.assistant_name);
+            var heading = self._panel && self._panel.querySelector("h2");
+            if (heading) {
+              heading.textContent = copy.title;
+            }
+          }
+          if (data.greeting) {
+            copy.greeting = String(data.greeting);
+          }
+          allowVisitorDocs = !!data.allow_visitor_documents;
+          if (data.show_suggestions === false) {
+            copy.suggestions = [];
+          } else if (Array.isArray(data.suggested_questions) && data.suggested_questions.length) {
+            copy.suggestions = data.suggested_questions.slice(0, 6).map(function (item) {
+              return String(item).slice(0, 80);
+            });
+          }
+          if (data.show_fullscreen === false && self._expandBtn && self._expandBtn.parentNode) {
+            self._expandBtn.parentNode.removeChild(self._expandBtn);
+            showFullscreen = false;
+          }
+        })
+        .catch(function () {
+          /* Appearance stays on script attributes. */
+        });
+    }
+
+    _openDocument(documentId, page) {
+      if (!allowVisitorDocs || !documentId || !apiBase) {
+        return;
+      }
+      /* Open the tab inside the click (popup blockers refuse a window opened
+         after an await), cut its opener, then point it at the signed link. */
+      var win = window.open("about:blank", "_blank");
+      if (win) {
+        try {
+          win.opener = null;
+        } catch (err) {
+          /* Some browsers make opener read-only; the tab is still ours. */
+        }
+      }
+      postJson(widgetPath("document-link"), { document_id: documentId, page: page || null })
+        .then(function (res) {
+          return readJson(res).then(function (data) {
+            return { status: res.status, data: data };
+          });
+        })
+        .then(function (result) {
+          var path = result.data && result.data.path;
+          /* Only a same-API signed path is followed; anything else closes the tab. */
+          if (
+            errorKind(result.status, result.data) !== "ok" ||
+            typeof path !== "string" ||
+            path.indexOf("/v1/signed-documents/") !== 0
+          ) {
+            if (win) {
+              win.close();
+            }
+            return;
+          }
+          if (win) {
+            win.location.href = apiBase + path;
+          }
+        })
+        .catch(function () {
+          /* Visitors still see the chip label. */
+          if (win) {
+            win.close();
+          }
+        });
     }
 
     open() {
@@ -567,9 +747,24 @@
         var row = document.createElement("div");
         row.className = "chips";
         for (var i = 0; i < chips.length; i++) {
-          var chip = document.createElement("span");
-          chip.className = "chip";
-          chip.textContent = chips[i];
+          var item = chips[i];
+          var label = typeof item === "string" ? item : item.label;
+          var docId = typeof item === "string" ? "" : item.documentId;
+          var page = typeof item === "string" ? 0 : item.page;
+          var chip;
+          if (allowVisitorDocs && docId) {
+            chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "chip";
+            chip.textContent = label;
+            chip.addEventListener("click", ((id, pg) => {
+              return () => this._openDocument(id, pg);
+            })(docId, page));
+          } else {
+            chip = document.createElement("span");
+            chip.className = "chip";
+            chip.textContent = label;
+          }
           row.appendChild(chip);
         }
         item.appendChild(row);
@@ -729,7 +924,7 @@
             writeToken(token);
           }
           var answer = formatAnswer(result.data);
-          self._add("assistant", answer || copy.emptyAnswer, sourceChips(result.data));
+          self._add("assistant", answer || copy.emptyAnswer, sourceChipItems(result.data));
         })
         .catch(function () {
           if (self.isConnected) {
@@ -780,13 +975,15 @@
   }
 
   var CSS = [
-    ":host { all: initial; display: block; position: fixed; z-index: 2147483000; pointer-events: none; color-scheme: light; }",
+    ":host { all: initial; display: block; position: fixed; z-index: 2147483000; pointer-events: none; color-scheme: light; --sai-color: #0f766e; }",
     ".bubble, .panel, .bubble *, .panel * { box-sizing: border-box; font-family: \"Segoe UI\", system-ui, sans-serif; }",
     ".bubble { pointer-events: auto; position: fixed; right: 20px; bottom: 20px; width: 56px; height: 56px;",
-    "  border: 0; border-radius: 50%; background: #0f766e; color: #fff; cursor: pointer;",
+    "  border: 0; border-radius: 50%; background: var(--sai-color, #0f766e); color: #fff; cursor: pointer;",
     "  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28); display: flex; align-items: center; justify-content: center; }",
     ".bubble:focus-visible, .close:focus-visible, .expand:focus-visible, .chip:focus-visible, .send:focus-visible, .composer input:focus-visible {",
     "  outline: 3px solid #f59e0b; outline-offset: 2px; }",
+    ":host(.is-left) .bubble { left: 20px; right: auto; }",
+    ":host(.is-left) .panel { left: 20px; right: auto; }",
     ".panel { pointer-events: auto; display: none; position: fixed; right: 20px; bottom: 88px; width: 360px;",
     "  max-width: calc(100vw - 32px); height: min(520px, calc(100vh - 120px)); background: #fff; color: #14221f;",
     "  border-radius: 16px; box-shadow: 0 16px 48px rgba(15, 23, 42, 0.28); flex-direction: column; overflow: hidden; }",
@@ -794,7 +991,7 @@
     ".panel.is-full { inset: 0; right: 0; bottom: 0; width: 100%; max-width: none; height: 100%; border-radius: 0; z-index: 2147483001; }",
     ":host(.is-full) .bubble { display: none; }",
     ".header { display: flex; align-items: center; justify-content: space-between; gap: 12px;",
-    "  padding: 12px 14px; background: #0f766e; color: #fff; }",
+    "  padding: 12px 14px; background: var(--sai-color, #0f766e); color: #fff; }",
     ".brand { display: flex; align-items: center; gap: 8px; min-width: 0; }",
     ".brand svg { width: 28px; height: 28px; flex: 0 0 auto; }",
     ".header h2 { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.3; }",
@@ -821,7 +1018,7 @@
     ".composer input { flex: 1 1 140px; min-width: 0; border: 1px solid #cbd5d1; border-radius: 10px; padding: 10px 12px;",
     "  font-size: 16px; color: #14221f; background: #fff; }",
     ".counter { flex: 0 0 auto; color: #64748b; font-size: 12px; }",
-    ".send { flex: 0 0 auto; border: 0; border-radius: 10px; background: #0f766e; color: #fff; padding: 10px 14px;",
+    ".send { flex: 0 0 auto; border: 0; border-radius: 10px; background: var(--sai-color, #0f766e); color: #fff; padding: 10px 14px;",
     "  font-size: 15px; cursor: pointer; }",
     ".send:disabled, .composer input:disabled { opacity: 0.55; cursor: not-allowed; }",
     "@media (max-width: 640px) {",

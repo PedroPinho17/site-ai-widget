@@ -224,6 +224,8 @@ def _company_locale(company_id: str) -> str | None:
     if not row or not row[0]:
         return None
     raw = str(row[0]).strip().lower()
+    if raw in ("auto",):
+        return None
     if raw.startswith("pt"):
         return "pt"
     if raw.startswith("en"):

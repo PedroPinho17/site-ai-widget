@@ -44,6 +44,7 @@ MESSAGES = {
     "pdf_too_many_pages": "PDF has more than {n} pages.",
     "pdf_corrupt": "Could not read this PDF.",
     "document_duplicate": "This file was already uploaded.",
+    "document_limit": "This company already has the maximum of {n} documents.",
     "question_too_long": "Question exceeds {n} characters.",
     "llm_not_configured": "Document Q&A is not configured (missing LLM API key).",
     "llm_unavailable": "The answer service is temporarily unavailable. Try again shortly.",
@@ -67,6 +68,9 @@ MESSAGES = {
     "schema_suggest_failed": "The AI returned an invalid answer. Try again.",
     "schema_not_present": "This table or column no longer exists in your database.",
     "column_sensitive": "A sensitive column cannot be approved. Unmark it as sensitive first.",
+    "signed_url_invalid": "This document link is not valid.",
+    "signed_url_expired": "This document link has expired.",
+    "visitor_documents_disabled": "Visitors cannot open documents.",
 }
 
 

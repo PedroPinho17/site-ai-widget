@@ -4,13 +4,17 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from site_ai_widget import ask_service
 from site_ai_widget.api.deps import charge_widget_ask, charge_widget_history
+from site_ai_widget.api.errors import ApiError
 from site_ai_widget.ask_service import AskResponse
+from site_ai_widget.db.pool import connection
+from site_ai_widget.docs.signed import sign_document_access
 from site_ai_widget.widget.access import append_turn, authorize_widget, load_history, resolve_session
 
 log = logging.getLogger("site_ai_widget")
@@ -72,7 +76,13 @@ def widget_ask(key: str, body: WidgetAskRequest, request: Request) -> WidgetAskR
         previous_lang=body.previous_lang,
     )
     token, session_id = resolve_session(record.company_id, body.session_token)
-    append_turn(session_id, record.company_id, (body.question or "").strip(), result)
+    append_turn(
+        session_id,
+        record.company_id,
+        (body.question or "").strip(),
+        result,
+        lang=result.lang,
+    )
     log.info("widget ask mode=%s key_prefix=%s", result.mode, _key_prefix(key))
     # Table names are schema text: the panel test page may show them, an anonymous
     # visitor never sees them.
@@ -86,3 +96,72 @@ def widget_history(key: str, body: WidgetHistoryRequest, request: Request) -> Wi
     charge_widget_history(request)
     messages = load_history(record.company_id, body.session_token)
     return WidgetHistoryResponse(messages=[WidgetHistoryMessage(**item) for item in messages])
+
+
+@router.get("/{key}/config")
+def widget_config(key: str, request: Request) -> dict:
+    record = authorize_widget(key, _origin(request))
+    with connection() as conn:
+        row = conn.execute(
+            """
+            SELECT primary_color, greeting, locale, position, assistant_name,
+                   show_suggestions, show_fullscreen, allow_visitor_documents,
+                   suggested_questions
+            FROM widget_settings
+            WHERE company_id = %s
+            """,
+            (str(record.company_id),),
+        ).fetchone()
+    if not row:
+        raise ApiError("not_found", 404)
+    questions = list(row[8] or [])
+    return {
+        "primary_color": row[0],
+        "greeting": row[1],
+        "locale": row[2],
+        "position": row[3],
+        "assistant_name": row[4],
+        "show_suggestions": bool(row[5]),
+        "show_fullscreen": bool(row[6]),
+        "allow_visitor_documents": bool(row[7]),
+        "suggested_questions": questions if row[5] else [],
+    }
+
+
+class DocumentLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: UUID
+    page: int | None = Field(default=None, ge=1, le=10_000)
+
+
+@router.post("/{key}/document-link")
+def widget_document_link(key: str, body: DocumentLinkRequest, request: Request) -> dict:
+    record = authorize_widget(key, _origin(request))
+    with connection() as conn:
+        settings = conn.execute(
+            "SELECT allow_visitor_documents FROM widget_settings WHERE company_id = %s",
+            (str(record.company_id),),
+        ).fetchone()
+        if not settings or not settings[0]:
+            raise ApiError("visitor_documents_disabled", 403)
+        doc = conn.execute(
+            """
+            SELECT id FROM documents
+            WHERE id = %s AND company_id = %s AND status = 'ready'
+            """,
+            (str(body.document_id), str(record.company_id)),
+        ).fetchone()
+    if not doc:
+        raise ApiError("not_found", 404)
+    sig, exp = sign_document_access(
+        company_id=record.company_id,
+        document_id=body.document_id,
+    )
+    # Relative path: the widget joins it to the API base it was loaded from.
+    # request.base_url is the internal host behind a proxy and follows the
+    # client's Host header, so it must not build links.
+    path = f"/v1/signed-documents/{body.document_id}?exp={exp}&sig={sig}"
+    if body.page:
+        path += f"#page={body.page}"
+    return {"path": path, "expires_at": exp}

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useI18n } from "@/i18n/useI18n";
+import type { MessageKey } from "@/i18n/messages";
 import {
   ApiRequestError,
   getDbConnectionRequest,
@@ -36,17 +38,19 @@ function tableKey(table: SchemaTable): string {
   return `${table.schema_name}.${table.name}`;
 }
 
-function statusLabel(connection: DbConnection | undefined): string {
+type Translate = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+function statusLabel(connection: DbConnection | undefined, t: Translate): string {
   if (!connection) {
-    return "Not connected";
+    return t("db.notConnected");
   }
   if (connection.status === "ok") {
-    return "Connected";
+    return t("db.connected");
   }
   if (connection.status === "failed") {
     return connection.last_error
-      ? `Failed: ${messageForCode(connection.last_error, "The database connection test failed.")}`
-      : "Failed";
+      ? t("db.failedWith", { reason: messageForCode(connection.last_error, messageForCode("db_connection_failed")) })
+      : t("db.failed");
   }
   return connection.status;
 }
@@ -63,6 +67,7 @@ function formFromConnection(conn: DbConnection): ConnectionForm {
 }
 
 export function DatabasePage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
@@ -133,7 +138,7 @@ export function DatabasePage() {
     onSuccess: async () => {
       setForm((prev) => ({ ...prev, password: "" }));
       setError("");
-      setNotice("Connection saved.");
+      setNotice(t("db.saved"));
       await queryClient.invalidateQueries({ queryKey: ["db-connection"] });
       await queryClient.invalidateQueries({ queryKey: ["db-schema"] });
     },
@@ -147,7 +152,7 @@ export function DatabasePage() {
     mutationFn: testDbConnectionRequest,
     onSuccess: async (data) => {
       setError("");
-      setNotice(data.status === "ok" ? "Connection test passed." : statusLabel(data));
+      setNotice(data.status === "ok" ? t("db.testPassed") : statusLabel(data, t));
       await queryClient.invalidateQueries({ queryKey: ["db-connection"] });
     },
     onError: (err) => {
@@ -160,12 +165,12 @@ export function DatabasePage() {
     mutationFn: () => saveSchemaApprovalRequest([...selected]),
     onSuccess: async () => {
       setError("");
-      setNotice("Table approval saved.");
+      setNotice(t("db.approvalSaved"));
       await queryClient.invalidateQueries({ queryKey: ["db-schema"] });
     },
     onError: (err) => {
       setNotice("");
-      setError(err instanceof ApiRequestError ? err.message : "Could not save approval.");
+      setError(err instanceof ApiRequestError ? err.message : t("db.approvalFail"));
     },
   });
 
@@ -191,13 +196,13 @@ export function DatabasePage() {
     onSuccess: async (result) => {
       setReloadDiff({ added: result.added, removed: result.removed });
       setError("");
-      setNotice("Schema reloaded.");
+      setNotice(t("db.reloaded"));
       queryClient.setQueryData(["db-schema"], result.after);
       await queryClient.invalidateQueries({ queryKey: ["db-connection"] });
     },
     onError: (err) => {
       setNotice("");
-      setError(err instanceof ApiRequestError ? err.message : "Could not reload the schema.");
+      setError(err instanceof ApiRequestError ? err.message : t("db.reloadFail"));
     },
   });
 
@@ -259,10 +264,8 @@ export function DatabasePage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Database</h1>
-        <p className="text-sm text-muted-foreground">
-          Read-only connection and which tables the widget may query.
-        </p>
+        <h1 className="text-xl font-semibold">{t("db.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("db.subtitle")}</p>
       </div>
       {notice ? <p className="text-sm text-primary">{notice}</p> : null}
       {error ? (
@@ -272,9 +275,9 @@ export function DatabasePage() {
       ) : null}
 
       <Card>
-        <CardTitle>Connection</CardTitle>
+        <CardTitle>{t("db.connection")}</CardTitle>
         {connection.isLoading ? (
-          <p className="mt-2 text-sm text-muted-foreground">Loading connection…</p>
+          <p className="mt-2 text-sm text-muted-foreground">{t("db.loadingConnection")}</p>
         ) : null}
         {connection.isError && connection.error instanceof ApiRequestError ? (
           <p role="alert" className="mt-2 text-sm text-destructive">
@@ -284,29 +287,29 @@ export function DatabasePage() {
         {connection.data ? (
           <div className="mt-3 space-y-1 text-sm">
             <p>
-              <span className="text-muted-foreground">Host:</span> {connection.data.host}
+              <span className="text-muted-foreground">{t("db.host")}:</span> {connection.data.host}
             </p>
             <p>
-              <span className="text-muted-foreground">Port:</span> {connection.data.port}
+              <span className="text-muted-foreground">{t("db.port")}:</span> {connection.data.port}
             </p>
             <p>
-              <span className="text-muted-foreground">Database:</span> {connection.data.database}
+              <span className="text-muted-foreground">{t("db.database")}:</span> {connection.data.database}
             </p>
             <p>
-              <span className="text-muted-foreground">User:</span> {connection.data.username}
+              <span className="text-muted-foreground">{t("db.user")}:</span> {connection.data.username}
             </p>
             <p>
-              <span className="text-muted-foreground">Status:</span> {statusLabel(connection.data)}
+              <span className="text-muted-foreground">{t("db.status")}:</span> {statusLabel(connection.data, t)}
             </p>
           </div>
         ) : connection.data === null && !connection.isLoading ? (
-          <p className="mt-2 text-sm text-muted-foreground">No connection saved yet.</p>
+          <p className="mt-2 text-sm text-muted-foreground">{t("db.noConnection")}</p>
         ) : null}
 
         {isAdmin ? (
           <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={onSaveConnection} autoComplete="off">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-host">Host</Label>
+              <Label htmlFor="db-host">{t("db.host")}</Label>
               <Input
                 id="db-host"
                 value={form.host}
@@ -315,7 +318,7 @@ export function DatabasePage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-port">Port</Label>
+              <Label htmlFor="db-port">{t("db.port")}</Label>
               <Input
                 id="db-port"
                 value={form.port}
@@ -324,7 +327,7 @@ export function DatabasePage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-name">Database</Label>
+              <Label htmlFor="db-name">{t("db.database")}</Label>
               <Input
                 id="db-name"
                 value={form.database}
@@ -333,7 +336,7 @@ export function DatabasePage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-user">User</Label>
+              <Label htmlFor="db-user">{t("db.user")}</Label>
               <Input
                 id="db-user"
                 value={form.username}
@@ -343,19 +346,19 @@ export function DatabasePage() {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-password">Password</Label>
+              <Label htmlFor="db-password">{t("db.password")}</Label>
               <Input
                 id="db-password"
                 type="password"
                 value={form.password}
                 onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
                 required={!hasConnection}
-                placeholder={hasConnection ? "Leave blank to keep current" : undefined}
+                placeholder={hasConnection ? t("db.keepPassword") : undefined}
                 autoComplete="new-password"
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="db-sslmode">SSL mode</Label>
+              <Label htmlFor="db-sslmode">{t("db.sslmode")}</Label>
               <select
                 id="db-sslmode"
                 className="h-10 rounded-md border border-border bg-card px-3 text-sm"
@@ -373,7 +376,7 @@ export function DatabasePage() {
             </div>
             <div className="flex flex-wrap gap-2 sm:col-span-2">
               <Button type="submit" disabled={saveConnection.isPending}>
-                {saveConnection.isPending ? "Saving…" : "Save connection"}
+                {saveConnection.isPending ? t("db.saving") : t("db.saveConnection")}
               </Button>
               <Button
                 type="button"
@@ -381,7 +384,7 @@ export function DatabasePage() {
                 disabled={!hasConnection || testConnection.isPending}
                 onClick={() => testConnection.mutate()}
               >
-                {testConnection.isPending ? "Testing…" : "Test connection"}
+                {testConnection.isPending ? t("db.testing") : t("db.testConnection")}
               </Button>
             </div>
           </form>
@@ -391,9 +394,9 @@ export function DatabasePage() {
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>Schema approval</CardTitle>
+            <CardTitle>{t("db.schemaApproval")}</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              {approvedCount} of {presentTables.length} tables approved for the widget.
+              {t("db.approvedCount", { approved: approvedCount, total: presentTables.length })}
             </p>
           </div>
           {isAdmin ? (
@@ -403,24 +406,24 @@ export function DatabasePage() {
               disabled={!hasConnection || reloadSchema.isPending}
               onClick={onReloadSchema}
             >
-              {reloadSchema.isPending ? "Reloading…" : "Reload schema"}
+              {reloadSchema.isPending ? t("db.reloading") : t("db.reload")}
             </Button>
           ) : null}
         </div>
         {reloadDiff ? (
           <div className="mt-3 space-y-1 text-sm">
             <p>
-              New tables:{" "}
-              {reloadDiff.added.length ? reloadDiff.added.join(", ") : "none"}
+              {t("db.newTables")}{" "}
+              {reloadDiff.added.length ? reloadDiff.added.join(", ") : t("db.noneLower")}
             </p>
             <p>
-              Removed tables:{" "}
-              {reloadDiff.removed.length ? reloadDiff.removed.join(", ") : "none"}
+              {t("db.removedTables")}{" "}
+              {reloadDiff.removed.length ? reloadDiff.removed.join(", ") : t("db.noneLower")}
             </p>
           </div>
         ) : null}
         {schema.isLoading ? (
-          <p className="mt-3 text-sm text-muted-foreground">Loading schema…</p>
+          <p className="mt-3 text-sm text-muted-foreground">{t("db.loadingSchema")}</p>
         ) : null}
         {schema.error instanceof ApiRequestError ? (
           <p role="alert" className="mt-3 text-sm text-destructive">
@@ -431,7 +434,7 @@ export function DatabasePage() {
           <>
             <div className="mt-4 flex flex-wrap items-end gap-2">
               <div className="flex min-w-56 flex-1 flex-col gap-1.5">
-                <Label htmlFor="schema-filter">Filter tables</Label>
+                <Label htmlFor="schema-filter">{t("db.filter")}</Label>
                 <Input
                   id="schema-filter"
                   value={filter}
@@ -442,17 +445,17 @@ export function DatabasePage() {
               {isAdmin ? (
                 <>
                   <Button type="button" variant="outline" onClick={() => selectAll(true)}>
-                    {filter.trim() ? "Select shown" : "Select all"}
+                    {filter.trim() ? t("db.selectShown") : t("db.selectAll")}
                   </Button>
                   <Button type="button" variant="outline" onClick={() => selectAll(false)}>
-                    {filter.trim() ? "Clear shown" : "Select none"}
+                    {filter.trim() ? t("db.clearShown") : t("db.selectNone")}
                   </Button>
                   <Button
                     type="button"
                     disabled={saveApproval.isPending}
                     onClick={() => saveApproval.mutate()}
                   >
-                    {saveApproval.isPending ? "Saving…" : "Save approval"}
+                    {saveApproval.isPending ? t("db.saving") : t("db.saveApproval")}
                   </Button>
                 </>
               ) : null}
@@ -475,11 +478,11 @@ export function DatabasePage() {
                         />
                       ) : null}
                       <span>
-                        {tableKey(table)} ({table.columns.length} columns)
+                        {tableKey(table)} {t("db.columns", { n: table.columns.length })}
                       </span>
                     </label>
                     <span className="text-xs text-muted-foreground">
-                      {canQuery ? "Widget can query" : "Not approved"}
+                      {canQuery ? t("db.canQuery") : t("db.notApproved")}
                     </span>
                   </li>
                 );
@@ -487,9 +490,7 @@ export function DatabasePage() {
             </ul>
           </>
         ) : connection.data ? (
-          <p className="mt-3 text-sm text-muted-foreground">
-            No tables yet. Use Reload schema after saving a connection.
-          </p>
+          <p className="mt-3 text-sm text-muted-foreground">{t("db.noTables")}</p>
         ) : null}
       </Card>
     </div>

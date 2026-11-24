@@ -367,3 +367,25 @@ def test_ask_docs_llm_failure_is_503_not_500(client, monkeypatch):
     assert r.status_code == 503, r.text
     assert r.json()["detail"]["code"] == "llm_unavailable"
     llm.reset_llm_client()
+
+
+def test_pdf_file_auth_and_company_isolation(client):
+    token_a, _, _ = _register(client)
+    token_b, _, _ = _register(client)
+    raw = _pdf_with_text("Manual da Mercearia Atlas horario de domingo.")
+    up = client.post(
+        "/documents",
+        headers=_auth(token_a),
+        files={"file": ("atlas.pdf", raw, "application/pdf")},
+    )
+    assert up.status_code == 202, up.text
+    doc_id = up.json()["id"]
+    body = _wait_status(client, token_a, doc_id)
+    assert body["status"] == "ready", body
+
+    assert client.get(f"/documents/{doc_id}/file").status_code == 401
+    assert client.get(f"/documents/{doc_id}/file", headers=_auth(token_b)).status_code == 404
+    ok = client.get(f"/documents/{doc_id}/file", headers=_auth(token_a))
+    assert ok.status_code == 200, ok.text
+    assert ok.headers["content-type"].startswith("application/pdf")
+    assert "no-store" in ok.headers.get("cache-control", "")

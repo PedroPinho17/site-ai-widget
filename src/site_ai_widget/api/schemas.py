@@ -56,6 +56,11 @@ class UserResponse(BaseModel):
     email: str
     role: str
     company_id: str
+    panel_locale: str = "pt"
+
+
+class PanelLocaleUpdate(BaseModel):
+    panel_locale: Literal["pt", "en"]
 
 
 class CompanyResponse(BaseModel):
@@ -74,6 +79,11 @@ class CompanyUpdate(BaseModel):
 CURRENCIES = ("EUR", "USD", "GBP", "BRL")
 
 
+MAX_SUGGESTIONS = 6
+MAX_SUGGESTION_LEN = 80
+LOCALES = ("pt", "en", "auto")
+
+
 class WidgetSettingsResponse(BaseModel):
     company_id: UUID
     primary_color: str
@@ -82,6 +92,11 @@ class WidgetSettingsResponse(BaseModel):
     position: str
     assistant_name: str
     currency: str | None = None
+    show_suggestions: bool = True
+    show_fullscreen: bool = True
+    allow_visitor_documents: bool = False
+    conversation_retention_days: int = 30
+    suggested_questions: list[str] = Field(default_factory=list)
 
 
 class WidgetSettingsUpdate(BaseModel):
@@ -91,6 +106,11 @@ class WidgetSettingsUpdate(BaseModel):
     position: str | None = None
     assistant_name: str | None = Field(default=None, max_length=80)
     currency: str | None = None
+    show_suggestions: bool | None = None
+    show_fullscreen: bool | None = None
+    allow_visitor_documents: bool | None = None
+    conversation_retention_days: int | None = Field(default=None, ge=1, le=365)
+    suggested_questions: list[str] | None = Field(default=None, max_length=MAX_SUGGESTIONS)
 
     @field_validator("primary_color")
     @classmethod
@@ -119,6 +139,33 @@ class WidgetSettingsUpdate(BaseModel):
         if code not in CURRENCIES:
             raise ValueError(f"currency must be one of {CURRENCIES}")
         return code
+
+    @field_validator("locale")
+    @classmethod
+    def locale_ok(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        code = value.strip().lower()
+        if code not in LOCALES:
+            raise ValueError("locale must be pt, en or auto")
+        return code
+
+    @field_validator("suggested_questions")
+    @classmethod
+    def suggestions_ok(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = " ".join(str(item).split())
+            if not text:
+                continue
+            if len(text) > MAX_SUGGESTION_LEN:
+                raise ValueError(f"suggested questions must be at most {MAX_SUGGESTION_LEN} characters")
+            cleaned.append(text)
+            if len(cleaned) > MAX_SUGGESTIONS:
+                raise ValueError(f"at most {MAX_SUGGESTIONS} suggested questions")
+        return cleaned
 
 
 def _valid_dns_name(host: str) -> bool:

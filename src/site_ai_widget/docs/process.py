@@ -117,6 +117,12 @@ def process_document(document_id: UUID | str, company_id: UUID | str) -> None:
                 """,
                 (page_count, doc_id, co_id),
             )
+        try:
+            from site_ai_widget.docs.suggestions import regenerate_suggested_questions
+
+            regenerate_suggested_questions(co_id)
+        except Exception:
+            log.warning("suggested questions skipped id=%s", doc_id)
     except Exception:
         log.exception("document processing failed id=%s", doc_id)
         _set_status(doc_id, co_id, "failed", error="processing failed")

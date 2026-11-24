@@ -7,6 +7,7 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useI18n } from "@/i18n/useI18n";
 import {
   ApiRequestError,
   createKeyRequest,
@@ -29,6 +30,7 @@ async function copyText(value: string): Promise<boolean> {
 }
 
 export function KeysPage() {
+  const { t } = useI18n();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
@@ -41,12 +43,12 @@ export function KeysPage() {
     mutationFn: createKeyRequest,
     onSuccess: async () => {
       setError("");
-      setNotice("Key created.");
+      setNotice(t("keys.created"));
       await queryClient.invalidateQueries({ queryKey: ["widget-keys"] });
     },
     onError: (err) => {
       setNotice("");
-      setError(err instanceof ApiRequestError ? err.message : "Could not create the key.");
+      setError(err instanceof ApiRequestError ? err.message : t("keys.createFail"));
     },
   });
 
@@ -55,12 +57,12 @@ export function KeysPage() {
     onSuccess: async () => {
       setRevokeId(null);
       setError("");
-      setNotice("Key deactivated.");
+      setNotice(t("keys.deactivated"));
       await queryClient.invalidateQueries({ queryKey: ["widget-keys"] });
     },
     onError: (err) => {
       setNotice("");
-      setError(err instanceof ApiRequestError ? err.message : "Could not deactivate the key.");
+      setError(err instanceof ApiRequestError ? err.message : t("keys.deactivateFail"));
     },
   });
 
@@ -68,14 +70,12 @@ export function KeysPage() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Keys &amp; Origins</h1>
-          <p className="text-sm text-muted-foreground">
-            Public widget keys and the sites allowed to embed them.
-          </p>
+          <h1 className="text-xl font-semibold">{t("keys.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("keys.subtitle")}</p>
         </div>
         {isAdmin ? (
           <Button type="button" onClick={() => createKey.mutate()} disabled={createKey.isPending}>
-            {createKey.isPending ? "Creating…" : "Create key"}
+            {createKey.isPending ? t("keys.creating") : t("keys.create")}
           </Button>
         ) : null}
       </div>
@@ -85,7 +85,7 @@ export function KeysPage() {
           {error}
         </p>
       ) : null}
-      {keys.isLoading ? <p className="text-sm text-muted-foreground">Loading keys…</p> : null}
+      {keys.isLoading ? <p className="text-sm text-muted-foreground">{t("keys.loading")}</p> : null}
       {keys.error instanceof ApiRequestError ? (
         <p role="alert" className="text-sm text-destructive">
           {keys.error.message}
@@ -115,18 +115,16 @@ export function KeysPage() {
       ))}
       {keys.data && keys.data.length === 0 ? (
         <Card>
-          <p className="text-sm text-muted-foreground">No widget keys yet.</p>
+          <p className="text-sm text-muted-foreground">{t("keys.empty")}</p>
         </Card>
       ) : null}
       <Dialog open={revokeId !== null} onOpenChange={(open) => !open && setRevokeId(null)}>
         <DialogContent>
-          <DialogTitle>Deactivate this key?</DialogTitle>
-          <DialogDescription>
-            Sites using it will stop receiving answers. You can create a new key afterwards.
-          </DialogDescription>
+          <DialogTitle>{t("keys.deactivateTitle")}</DialogTitle>
+          <DialogDescription>{t("keys.deactivateBody")}</DialogDescription>
           <div className="mt-4 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setRevokeId(null)}>
-              Cancel
+              {t("keys.cancel")}
             </Button>
             <Button
               type="button"
@@ -134,7 +132,7 @@ export function KeysPage() {
               disabled={revokeKey.isPending || !revokeId}
               onClick={() => revokeId && revokeKey.mutate(revokeId)}
             >
-              Deactivate
+              {t("keys.deactivate")}
             </Button>
           </div>
         </DialogContent>
@@ -158,34 +156,34 @@ function KeyCard({
   onOrigins: (origins: string[]) => Promise<void>;
   onOriginError: (message: string) => void;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState("");
 
   async function addOrigin() {
     const parsed = parseAllowedOrigin(draft);
-    const message = originError(draft);
-    if (!parsed || message) {
-      onOriginError(message ?? "That origin is not valid.");
+    if (!parsed || originError(draft)) {
+      onOriginError(draft.trim() ? t("keys.originFormat") : t("keys.originEmpty"));
       return;
     }
     if (item.allowed_origins.includes(parsed)) {
-      onOriginError("That origin is already on the list.");
+      onOriginError(t("keys.originDuplicate"));
       return;
     }
     try {
       await onOrigins([...item.allowed_origins, parsed]);
       setDraft("");
-      onCopied("Origin added.");
+      onCopied(t("keys.originAdded"));
     } catch (err) {
-      onOriginError(err instanceof ApiRequestError ? err.message : "Could not save the origin.");
+      onOriginError(err instanceof ApiRequestError ? err.message : t("keys.originSaveFail"));
     }
   }
 
   async function removeOrigin(origin: string) {
     try {
       await onOrigins(item.allowed_origins.filter((itemOrigin) => itemOrigin !== origin));
-      onCopied("Origin removed.");
+      onCopied(t("keys.originRemoved"));
     } catch (err) {
-      onOriginError(err instanceof ApiRequestError ? err.message : "Could not save the origin.");
+      onOriginError(err instanceof ApiRequestError ? err.message : t("keys.originSaveFail"));
     }
   }
 
@@ -194,7 +192,7 @@ function KeyCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle className="font-mono text-base">{keyPrefix(item.public_key)}</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">{item.is_active ? "Active" : "Inactive"}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{item.is_active ? t("keys.active") : t("keys.inactive")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -203,10 +201,10 @@ function KeyCard({
             size="sm"
             onClick={async () => {
               const ok = await copyText(item.public_key);
-              onCopied(ok ? "Public key copied." : "Could not copy.");
+              onCopied(ok ? t("keys.keyCopied") : t("keys.copyFail"));
             }}
           >
-            Copy key
+            {t("keys.copyKey")}
           </Button>
           <Button
             type="button"
@@ -214,22 +212,22 @@ function KeyCard({
             size="sm"
             onClick={async () => {
               const ok = await copyText(embedSnippet(API_URL, item.public_key));
-              onCopied(ok ? "Embed snippet copied." : "Could not copy.");
+              onCopied(ok ? t("keys.snippetCopied") : t("keys.copyFail"));
             }}
           >
-            Copy embed snippet
+            {t("keys.copySnippet")}
           </Button>
           {isAdmin && item.is_active ? (
             <Button type="button" variant="destructive" size="sm" onClick={onRevoke}>
-              Deactivate
+              {t("keys.deactivate")}
             </Button>
           ) : null}
         </div>
       </div>
       <div className="mt-4">
-        <p className="text-sm font-medium">Allowed origins</p>
+        <p className="text-sm font-medium">{t("keys.allowedOrigins")}</p>
         {item.allowed_origins.length === 0 ? (
-          <p className="mt-1 text-sm text-muted-foreground">None. The widget will refuse every site.</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t("keys.noOrigins")}</p>
         ) : (
           <ul className="mt-2 flex flex-col gap-2">
             {item.allowed_origins.map((origin) => (
@@ -237,7 +235,7 @@ function KeyCard({
                 <code className="text-sm">{origin}</code>
                 {isAdmin ? (
                   <Button type="button" variant="ghost" size="sm" onClick={() => void removeOrigin(origin)}>
-                    Remove
+                    {t("keys.remove")}
                   </Button>
                 ) : null}
               </li>
@@ -247,7 +245,7 @@ function KeyCard({
         {isAdmin ? (
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <div className="flex min-w-56 flex-1 flex-col gap-1.5">
-              <Label htmlFor={`origin-${item.id}`}>Add origin</Label>
+              <Label htmlFor={`origin-${item.id}`}>{t("keys.addOrigin")}</Label>
               <Input
                 id={`origin-${item.id}`}
                 value={draft}
@@ -256,7 +254,7 @@ function KeyCard({
               />
             </div>
             <Button type="button" variant="outline" onClick={() => void addOrigin()}>
-              Add
+              {t("keys.add")}
             </Button>
           </div>
         ) : null}

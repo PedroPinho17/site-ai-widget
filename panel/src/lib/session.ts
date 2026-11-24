@@ -6,6 +6,7 @@ export type AuthUser = {
   email: string;
   role: string;
   company_id: string;
+  panel_locale?: "pt" | "en";
 };
 
 let memoryToken: string | null = null;
@@ -29,7 +30,13 @@ function readStoredUser(): AuthUser | null {
       typeof rec.role === "string" &&
       typeof rec.company_id === "string"
     ) {
-      return { id: rec.id, email: rec.email, role: rec.role, company_id: rec.company_id };
+      return {
+        id: rec.id,
+        email: rec.email,
+        role: rec.role,
+        company_id: rec.company_id,
+        panel_locale: rec.panel_locale === "en" || rec.panel_locale === "pt" ? rec.panel_locale : undefined,
+      };
     }
     return null;
   } catch {

@@ -162,7 +162,7 @@ describe("dashboard", () => {
     );
     setSession("test-jwt-token", admin);
     renderPanel("/");
-    const docsCard = (await screen.findByText("Documents", { selector: "h3, h2, div, p, span" })).parentElement!;
+    const docsCard = (await screen.findByRole("heading", { name: "Documents", level: 2 })).parentElement!;
     await waitFor(() => {
       expect(docsCard).toHaveTextContent("—");
     });

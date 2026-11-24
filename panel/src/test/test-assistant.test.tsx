@@ -27,27 +27,28 @@ function mockFetch() {
         default_locale: "pt",
       });
     }
+    const settings = {
+      company_id: admin.company_id,
+      primary_color: "#0f766e",
+      greeting: "Olá",
+      locale: "pt",
+      position: "bottom-right",
+      assistant_name: "Atlas",
+      currency: "EUR",
+      show_suggestions: true,
+      show_fullscreen: true,
+      allow_visitor_documents: false,
+      conversation_retention_days: 30,
+      suggested_questions: [],
+    };
+    if (url.endsWith("/widget-keys")) {
+      return jsonResponse(200, []);
+    }
     if (url.endsWith("/company/widget-settings") && init?.method === "PATCH") {
-      return jsonResponse(200, {
-        company_id: admin.company_id,
-        primary_color: "#0f766e",
-        greeting: "Olá",
-        locale: "pt",
-        position: "bottom-right",
-        assistant_name: "Atlas",
-        currency: "USD",
-      });
+      return jsonResponse(200, { ...settings, currency: "USD" });
     }
     if (url.endsWith("/company/widget-settings")) {
-      return jsonResponse(200, {
-        company_id: admin.company_id,
-        primary_color: "#0f766e",
-        greeting: "Olá",
-        locale: "pt",
-        position: "bottom-right",
-        assistant_name: "Atlas",
-        currency: "EUR",
-      });
+      return jsonResponse(200, settings);
     }
     if (url.endsWith("/assistant/test")) {
       return jsonResponse(200, {

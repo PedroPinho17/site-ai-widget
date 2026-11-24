@@ -22,7 +22,7 @@ from site_ai_widget.api.deps import charge_widget_lookup
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.widget.access import authorize_widget
 
-_PATH = re.compile(r"^/v1/widget/([^/]+)/(ask|history)$")
+_PATH = re.compile(r"^/v1/widget/([^/]+)/(ask|history|config|document-link)$")
 
 
 def _header_bytes(scope, name: bytes) -> bytes | None:
@@ -39,7 +39,7 @@ def _cors(origin: bytes) -> list[tuple[bytes, bytes]]:
     return [
         (b"access-control-allow-origin", origin),
         _VARY,
-        (b"access-control-allow-methods", b"POST"),
+        (b"access-control-allow-methods", b"GET, POST"),
         (b"access-control-allow-headers", b"Content-Type"),
         (b"access-control-max-age", b"600"),
     ]

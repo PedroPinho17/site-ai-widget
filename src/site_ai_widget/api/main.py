@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from site_ai_widget.api.body_limit import BodySizeLimitMiddleware, default_limit_for
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError, api_error_handler
+from site_ai_widget.api.log_redact import install as install_log_redaction
 from site_ai_widget.api.panel_cors import PanelCorsMiddleware
 from site_ai_widget.api.routes import (
     ask,
@@ -18,10 +19,13 @@ from site_ai_widget.api.routes import (
     assistant,
     auth_routes,
     company,
+    conversations,
     db_connection,
     documents,
     embed_script,
     health,
+    signed_documents,
+    stats,
     widget,
     widget_keys,
 )
@@ -29,6 +33,7 @@ from site_ai_widget.api.widget_cors import WidgetCorsMiddleware
 from site_ai_widget.db import pool as db_pool
 from site_ai_widget.docs.storage import upload_root
 from site_ai_widget.docs.worker import recover_stuck_documents, shutdown_worker
+from site_ai_widget.widget.retention import start_retention_job, stop_retention_job
 
 log = logging.getLogger("site_ai_widget")
 
@@ -71,15 +76,18 @@ async def lifespan(_app: FastAPI):
             recover_stuck_documents()
         except Exception:
             log.warning("Could not recover stuck documents", exc_info=True)
+        start_retention_job()
     else:
         log.warning("Postgres unreachable at startup; skipping stuck-document recovery")
     yield
+    stop_retention_job()
     shutdown_worker()
     db_pool.close_pool()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    install_log_redaction()
     app = FastAPI(
         title="site-ai-widget",
         version="0.2.0",
@@ -130,6 +138,9 @@ def create_app() -> FastAPI:
     app.include_router(ask.router)
     app.include_router(assistant.router)
     app.include_router(db_connection.router)
+    app.include_router(conversations.router)
+    app.include_router(stats.router)
+    app.include_router(signed_documents.router)
     return app
 
 

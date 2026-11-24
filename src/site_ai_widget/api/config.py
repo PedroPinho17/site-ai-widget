@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     upload_dir: str = Field(default="data/uploads")
     max_upload_mb: int = Field(default=25, ge=1, le=200)
     max_pdf_pages: int = Field(default=300, ge=1, le=5000)
+    max_documents: int = Field(default=50, ge=1, le=1000)
     max_question_chars: int = Field(default=1000, ge=1, le=10_000)
     embedding_model: str = Field(default="intfloat/multilingual-e5-small")
     groq_api_key: str | None = None

@@ -142,8 +142,9 @@ def test_source_chips_expand_and_typing_in_embed():
     import json
 
     source = _js()
-    start = source.index("  function sourceChips(data) {")
-    end = source.index("\n  }\n", start) + 4
+    start = source.index("  function sourceChipItems(data) {")
+    chips_fn = source.index("  function sourceChips(data) {")
+    end = source.index("\n  }\n", chips_fn) + 4
     function = source[start:end]
     cell_start = source.index("  function cellText(value) {")
     cell_end = source.index("\n  }\n", cell_start) + 4

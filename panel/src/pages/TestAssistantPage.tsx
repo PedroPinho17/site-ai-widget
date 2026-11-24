@@ -1,9 +1,12 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 
+import { PdfPreview } from "@/components/PdfPreview";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n/useI18n";
 import {
   ApiRequestError,
   type AssistantTestResponse,
+  type SourceChip,
   sourceChips,
   testAssistantRequest,
 } from "@/lib/api";
@@ -15,7 +18,7 @@ type ChatMessage = {
   id: number;
   role: "user" | "assistant";
   text: string;
-  chips: string[];
+  chips: SourceChip[];
   elapsed_ms?: number | null;
   lang?: "pt" | "en" | null;
 };
@@ -42,6 +45,8 @@ function previousAnswerLang(messages: ChatMessage[]): "pt" | "en" | null {
 }
 
 export function TestAssistantPage() {
+  const { t } = useI18n();
+  const [preview, setPreview] = useState<{ id: string; page: number } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,15 +110,15 @@ export function TestAssistantPage() {
   return (
     <section className="mx-auto flex h-[calc(100vh-8rem)] max-w-3xl flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Test assistant</h1>
+        <h1 className="text-xl font-semibold">{t("test.title")}</h1>
         <Button type="button" variant="outline" onClick={() => setMessages([])}>
-          Clear chat
+          {t("test.clear")}
         </Button>
       </div>
       <div ref={logRef} className="flex flex-1 flex-col gap-3 overflow-y-auto rounded-lg border border-border bg-muted/40 p-4">
         {messages.length === 0 ? (
           <div className="m-auto flex max-w-md flex-col items-center gap-3 text-center">
-            <p className="text-sm text-muted-foreground">Try a question about the shop.</p>
+            <p className="text-sm text-muted-foreground">{t("test.hint")}</p>
             {EXAMPLES.map((example) => (
               <Button key={example} type="button" variant="outline" onClick={() => void send(example)}>
                 {example}
@@ -137,11 +142,22 @@ export function TestAssistantPage() {
               )}
               {message.chips.length ? (
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {message.chips.map((chip, index) => (
-                    <span key={`${index}-${chip}`} className="rounded-full bg-muted px-2 py-0.5 text-xs">
-                      {chip}
-                    </span>
-                  ))}
+                  {message.chips.map((chip, index) =>
+                    chip.documentId ? (
+                      <button
+                        key={`${index}-${chip.label}`}
+                        type="button"
+                        className="rounded-full bg-muted px-2 py-0.5 text-xs"
+                        onClick={() => setPreview({ id: chip.documentId!, page: chip.page || 1 })}
+                      >
+                        {chip.label}
+                      </button>
+                    ) : (
+                      <span key={`${index}-${chip.label}`} className="rounded-full bg-muted px-2 py-0.5 text-xs">
+                        {chip.label}
+                      </span>
+                    ),
+                  )}
                 </div>
               ) : null}
               {message.role === "assistant" && typeof message.elapsed_ms === "number" ? (
@@ -152,7 +168,7 @@ export function TestAssistantPage() {
         )}
         {busy ? (
           <p className="text-sm text-muted-foreground" role="status">
-            A escrever…
+            {t("test.typing")}
           </p>
         ) : null}
       </div>
@@ -163,20 +179,30 @@ export function TestAssistantPage() {
       ) : null}
       <form className="flex items-end gap-2" onSubmit={onSubmit}>
         <label className="sr-only" htmlFor="test-question">
-          Question
+          {t("test.question")}
         </label>
         <textarea
           id="test-question"
           className="min-h-12 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm"
           value={text}
-          placeholder="Escreva uma pergunta"
+          placeholder={t("test.placeholder")}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
         />
         <Button type="submit" disabled={busy || text.trim().length === 0}>
-          Send
+          {t("test.send")}
         </Button>
       </form>
+      {preview ? (
+        <div className="rounded-lg border border-border p-3">
+          <div className="mb-2 flex justify-end">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setPreview(null)}>
+              {t("test.closePreview")}
+            </Button>
+          </div>
+          <PdfPreview key={`${preview.id}-${preview.page}`} documentId={preview.id} page={preview.page} />
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,6 +1,8 @@
 /** Client-side limits mirrored from the API (MAX_UPLOAD_MB default, PDF only). */
 export const MAX_UPLOAD_MB = 25;
 export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+/** Files per drag & drop / picker batch. The API also caps documents per company. */
+export const MAX_FILES_PER_DROP = 10;
 
 const PDF_TYPES = new Set(["application/pdf"]);
 
@@ -28,6 +30,6 @@ export function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function documentTypeLabel(name: string): string {
-  return name.toLowerCase().endsWith(".pdf") ? "PDF" : "File";
+export function isPdfName(name: string): boolean {
+  return name.toLowerCase().endsWith(".pdf");
 }

@@ -24,6 +24,10 @@ def enqueue_document(document_id: UUID | str, company_id: UUID | str) -> None:
     _pool().submit(process_document, str(document_id), str(company_id))
 
 
+def enqueue_callable(fn, *args) -> None:
+    _pool().submit(fn, *args)
+
+
 def recover_stuck_documents() -> int:
     """Reset ``processing`` → ``pending`` and re-queue (app restart recovery)."""
     with connection() as conn:

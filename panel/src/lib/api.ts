@@ -1,4 +1,6 @@
 import { API_URL } from "@/lib/config";
+import { errorMessage } from "@/i18n/messages";
+import { getI18nLocale } from "@/i18n/state";
 import { getToken, notifyUnauthorized } from "@/lib/session";
 
 export class ApiRequestError extends Error {
@@ -13,66 +15,38 @@ export class ApiRequestError extends Error {
   }
 }
 
-const SAFE_BY_CODE: Record<string, string> = {
-  bad_login: "Wrong email or password.",
-  session_invalid: "Your session expired. Sign in again.",
-  forbidden: "You do not have permission to do that.",
-  validation_error: "That value is not valid.",
-  not_found: "Not found.",
-  rate_limited: "Too many requests. Try again shortly.",
-  email_taken: "That email is already registered.",
-  slug_taken: "That company slug is already taken.",
-  not_pdf: "Only PDF files are accepted.",
-  upload_too_large: "That file is too large.",
-  pdf_encrypted: "Encrypted PDFs are not supported.",
-  pdf_too_many_pages: "That PDF has too many pages.",
-  pdf_corrupt: "Could not read that PDF.",
-  document_duplicate: "That file was already uploaded.",
-  connections_not_configured: "Database connections are not configured.",
-  connection_unreadable: "The saved connection cannot be read. Save it again.",
-  db_host_invalid: "Invalid database host or port.",
-  db_host_unresolvable: "Could not resolve the database host.",
-  db_host_not_allowed: "That host is not allowed.",
-  db_unreachable: "Could not reach a PostgreSQL server at that host and port.",
-  db_auth_failed: "Wrong username or password for the database.",
-  db_not_found: "That database does not exist.",
-  db_version_unsupported: "PostgreSQL 13 or newer is required.",
-  db_user_can_write: "Use a read-only database user (SELECT only).",
-  db_no_readable_tables: "This user cannot read any table.",
-  db_connection_failed: "The database connection test failed.",
-  db_schema_too_large: "This database has too many tables or columns.",
-  db_timeout: "The database took too long to answer.",
-  db_busy: "Too many database checks are running. Try again shortly.",
-  db_schema_invalid: "The database sent invalid schema details.",
-  db_password_required: "Enter the database password to change the connection.",
-  db_conflict_retry: "Another change conflicted. Try again.",
-  schema_not_present: "That table no longer exists in your database.",
-  column_sensitive: "A sensitive column cannot be approved.",
-  network_error: "Could not reach the server. Try again.",
-};
+function localized(code: string): string | null {
+  return errorMessage(getI18nLocale(), code);
+}
 
+function networkMessage(): string {
+  return localized("network_error") ?? "Could not reach the server. Try again.";
+}
+
+/** Fixed, translated message for a status / code (never raw server text). */
 function safeMessage(status: number, code: string): string {
-  if (SAFE_BY_CODE[code]) {
-    return SAFE_BY_CODE[code];
+  const known = localized(code);
+  if (known) {
+    return known;
   }
   if (status === 401) {
-    return SAFE_BY_CODE.session_invalid;
+    return localized("session_invalid")!;
   }
   if (status === 403) {
-    return SAFE_BY_CODE.forbidden;
+    return localized("forbidden")!;
   }
   if (status === 429) {
-    return SAFE_BY_CODE.rate_limited;
+    return localized("rate_limited")!;
   }
   if (status >= 500) {
-    return "The server is unavailable. Try again shortly.";
+    return localized("server_unavailable")!;
   }
-  return "Something went wrong. Try again.";
+  return localized("generic")!;
 }
 
 /** Fixed message for a known API / client check code (never raw server text). */
-export function messageForCode(code: string, fallback = "Something went wrong. Try again."): string {
-  return SAFE_BY_CODE[code] ?? fallback;
+export function messageForCode(code: string, fallback?: string): string {
+  return localized(code) ?? fallback ?? localized("generic")!;
 }
 
 function readCode(data: unknown): string {
@@ -108,7 +82,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: "omit",
     });
   } catch {
-    throw new ApiRequestError(0, "network_error", SAFE_BY_CODE.network_error);
+    throw new ApiRequestError(0, "network_error", networkMessage());
   }
 
   const raw = await response.text();
@@ -156,6 +130,7 @@ export type DocumentItem = {
   size_bytes: number;
   page_count: number | null;
   status: string;
+  error?: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -223,12 +198,13 @@ export type IntrospectResponse = {
 export type TokenResponse = {
   access_token: string;
   token_type: string;
-  user: {
-    id: string;
-    email: string;
-    role: string;
-    company_id: string;
-  };
+    user: {
+      id: string;
+      email: string;
+      role: string;
+      company_id: string;
+      panel_locale?: "pt" | "en";
+    };
 };
 
 export function loginRequest(email: string, password: string): Promise<TokenResponse> {
@@ -278,6 +254,79 @@ export function uploadDocumentRequest(file: File): Promise<DocumentItem> {
   return api("/documents", { method: "POST", body });
 }
 
+export function uploadDocumentWithProgress(
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<DocumentItem> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/documents`);
+    xhr.setRequestHeader("Accept", "application/json");
+    const token = getToken();
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        notifyUnauthorized();
+        reject(new ApiRequestError(401, "session_invalid", safeMessage(401, "session_invalid")));
+        return;
+      }
+      let data: unknown = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = null;
+      }
+      const code = readCode(data);
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new ApiRequestError(xhr.status, code || "error", safeMessage(xhr.status, code)));
+        return;
+      }
+      resolve(data as DocumentItem);
+    };
+    xhr.onerror = () => {
+      reject(new ApiRequestError(0, "network_error", networkMessage()));
+    };
+    const body = new FormData();
+    body.append("file", file);
+    xhr.send(body);
+  });
+}
+
+export async function documentFileBlob(id: string): Promise<Blob> {
+  const headers = new Headers({ Accept: "application/pdf" });
+  const token = getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/documents/${encodeURIComponent(id)}/file`, {
+      headers,
+      credentials: "omit",
+    });
+  } catch {
+    throw new ApiRequestError(0, "network_error", networkMessage());
+  }
+  if (response.status === 401) {
+    notifyUnauthorized();
+    throw new ApiRequestError(401, "session_invalid", safeMessage(401, "session_invalid"));
+  }
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, "error", safeMessage(response.status, "error"));
+  }
+  // Pin the type: the blob: URL inherits the panel origin, so it must only
+  // ever be rendered by the PDF viewer, never as HTML.
+  const raw = await response.blob();
+  return new Blob([raw], { type: "application/pdf" });
+}
+
 export function deleteDocumentRequest(id: string): Promise<void> {
   return api(`/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
@@ -320,16 +369,87 @@ export type WidgetSettings = {
   position: string;
   assistant_name: string;
   currency: string | null;
+  show_suggestions: boolean;
+  show_fullscreen: boolean;
+  allow_visitor_documents: boolean;
+  conversation_retention_days: number;
+  suggested_questions: string[];
 };
 
 export function widgetSettingsRequest(): Promise<WidgetSettings> {
   return api("/company/widget-settings");
 }
 
-export function updateWidgetSettingsRequest(body: { currency: string | null }): Promise<WidgetSettings> {
+export function updateWidgetSettingsRequest(body: Partial<WidgetSettings>): Promise<WidgetSettings> {
   return api("/company/widget-settings", {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+export type ConversationListItem = {
+  id: string;
+  created_at: string | null;
+  last_seen: string | null;
+  lang: string | null;
+  message_count: number;
+  unanswered: boolean;
+  answer_source: string;
+};
+
+export type ConversationDetail = {
+  id: string;
+  created_at: string | null;
+  last_seen: string | null;
+  lang: string | null;
+  messages: {
+    role: string;
+    text: string | null;
+    mode: string | null;
+    unanswered: boolean;
+    elapsed_ms: number | null;
+    created_at: string | null;
+  }[];
+};
+
+export function listConversationsRequest(params?: {
+  unanswered?: boolean;
+  date_from?: string;
+  date_to?: string;
+}): Promise<ConversationListItem[]> {
+  const query = new URLSearchParams();
+  if (params?.unanswered) {
+    query.set("unanswered", "true");
+  }
+  if (params?.date_from) {
+    query.set("date_from", params.date_from);
+  }
+  if (params?.date_to) {
+    query.set("date_to", params.date_to);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return api(`/conversations${suffix}`);
+}
+
+export function getConversationRequest(id: string): Promise<ConversationDetail> {
+  return api(`/conversations/${encodeURIComponent(id)}`);
+}
+
+export type DashboardStats = {
+  questions_per_day: { day: string; count: number }[];
+  source_share: { sql: number; docs: number; none: number; chat: number };
+  top_unanswered: { question: string; count: number }[];
+  average_response_ms: number | null;
+};
+
+export function dashboardStatsRequest(): Promise<DashboardStats> {
+  return api("/stats/dashboard");
+}
+
+export function updatePanelLocaleRequest(panel_locale: "pt" | "en"): Promise<TokenResponse["user"]> {
+  return api("/auth/locale", {
+    method: "PATCH",
+    body: JSON.stringify({ panel_locale }),
   });
 }
 
@@ -367,21 +487,31 @@ export function testAssistantRequest(
   });
 }
 
-export function sourceChips(data: AssistantTestResponse): string[] {
+export type SourceChip = {
+  label: string;
+  documentId?: string;
+  page?: number;
+};
+
+export function sourceChips(data: AssistantTestResponse): SourceChip[] {
   if (data.mode === "chat") {
     return [];
   }
-  const chips: string[] = [];
+  const chips: SourceChip[] = [];
   for (const source of data.sources ?? []) {
     const name = source.document_name?.trim();
     if (!name) {
       continue;
     }
-    chips.push(source.page ? `Documento: ${name} p. ${source.page}` : `Documento: ${name}`);
+    chips.push({
+      label: source.page ? `Documento: ${name} p. ${source.page}` : `Documento: ${name}`,
+      documentId: source.document_id,
+      page: source.page,
+    });
   }
   for (const table of data.tables ?? []) {
     if (table.trim()) {
-      chips.push(`Base de dados: ${table.trim()}`);
+      chips.push({ label: `Base de dados: ${table.trim()}` });
     }
   }
   return chips;

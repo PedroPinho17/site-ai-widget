@@ -3,9 +3,10 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AuthProvider } from "@/auth/AuthProvider";
 import { RequireAuth } from "@/auth/RequireAuth";
+import { LocaleRoot } from "@/i18n/LocaleRoot";
 import { AppLayout } from "@/layout/AppLayout";
 import { createQueryClient } from "@/lib/query-client";
-import { ComingSoonPage } from "@/pages/ComingSoonPage";
+import { ConversationsPage } from "@/pages/ConversationsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DatabasePage } from "@/pages/DatabasePage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
@@ -25,7 +26,7 @@ export function AppRoutes() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/database" element={<DatabasePage />} />
-          <Route path="/conversations" element={<ComingSoonPage title="Conversations" />} />
+          <Route path="/conversations" element={<ConversationsPage />} />
           <Route path="/widget" element={<WidgetPage />} />
           <Route path="/test" element={<TestAssistantPage />} />
           <Route path="/keys" element={<KeysPage />} />
@@ -40,7 +41,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <AppRoutes />
+          <LocaleRoot>
+            <AppRoutes />
+          </LocaleRoot>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

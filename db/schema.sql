@@ -27,6 +27,8 @@ CREATE TABLE users (
     role           text NOT NULL DEFAULT 'admin'
                    CHECK (role IN ('admin', 'member')),
     token_version  integer NOT NULL DEFAULT 0,
+    panel_locale   text NOT NULL DEFAULT 'pt'
+                   CONSTRAINT users_panel_locale_chk CHECK (panel_locale IN ('pt', 'en')),
     created_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (email)
 );
@@ -53,11 +55,13 @@ CREATE TABLE visitor_sessions (
     token_hash  text NOT NULL CHECK (token_hash ~ '^[0-9a-f]{64}$'),
     created_at  timestamptz NOT NULL DEFAULT now(),
     last_seen   timestamptz NOT NULL DEFAULT now(),
+    lang        text,
     UNIQUE (company_id, token_hash),
     UNIQUE (id, company_id)
 );
 
 CREATE INDEX visitor_sessions_company_idx ON visitor_sessions (company_id);
+CREATE INDEX visitor_sessions_company_seen_idx ON visitor_sessions (company_id, last_seen);
 
 CREATE TABLE visitor_messages (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -68,23 +72,35 @@ CREATE TABLE visitor_messages (
     text        text,
     mode        text CHECK (mode IS NULL OR mode IN ('sql', 'docs', 'none', 'chat')),
     row_count   integer CHECK (row_count IS NULL OR row_count >= 0),
+    unanswered  boolean NOT NULL DEFAULT false,
+    elapsed_ms  integer,
     created_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
     FOREIGN KEY (session_id, company_id)
         REFERENCES visitor_sessions (id, company_id) ON DELETE CASCADE
 );
 
 CREATE INDEX visitor_messages_session_seq_idx ON visitor_messages (session_id, seq);
+CREATE INDEX visitor_messages_company_created_idx ON visitor_messages (company_id, created_at);
 
 CREATE TABLE widget_settings (
     company_id     uuid PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
     primary_color  text NOT NULL DEFAULT '#2563eb',
     greeting       text NOT NULL DEFAULT 'Olá! Como posso ajudar?',
-    locale         text NOT NULL DEFAULT 'pt',
+    locale         text NOT NULL DEFAULT 'pt'
+                   CONSTRAINT widget_settings_locale_check CHECK (locale IN ('pt', 'en', 'auto')),
     position       text NOT NULL DEFAULT 'bottom-right'
                    CHECK (position IN ('bottom-right', 'bottom-left')),
     assistant_name text NOT NULL DEFAULT 'Assistente',
     currency       text
-                   CHECK (currency IS NULL OR currency IN ('EUR', 'USD', 'GBP', 'BRL'))
+                   CHECK (currency IS NULL OR currency IN ('EUR', 'USD', 'GBP', 'BRL')),
+    show_suggestions boolean NOT NULL DEFAULT true,
+    show_fullscreen boolean NOT NULL DEFAULT true,
+    allow_visitor_documents boolean NOT NULL DEFAULT false,
+    conversation_retention_days integer NOT NULL DEFAULT 30
+                   CONSTRAINT widget_settings_retention_chk
+                   CHECK (conversation_retention_days BETWEEN 1 AND 365),
+    suggested_questions text[] NOT NULL DEFAULT '{}',
+    suggestions_manual boolean NOT NULL DEFAULT false
 );
 
 -- Phase 2: documents + hybrid RAG chunks

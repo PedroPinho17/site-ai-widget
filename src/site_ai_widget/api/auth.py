@@ -23,7 +23,7 @@ bearer = HTTPBearer(auto_error=False)
 # Constant-time login: always run a bcrypt check even when the email is unknown
 _DUMMY_HASH = bcrypt.hashpw(b"dummy-password", bcrypt.gensalt())
 
-USER_COLUMNS = "id, company_id, email, role, token_version"
+USER_COLUMNS = "id, company_id, email, role, token_version, panel_locale"
 BUMP_TOKEN_VERSION = "token_version = token_version + 1"
 
 
@@ -47,13 +47,14 @@ def validate_password(password: str) -> None:
 
 
 def _row_to_user(row) -> dict[str, Any]:
-    uid, company_id, email, role, token_version = row
+    uid, company_id, email, role, token_version, panel_locale = row
     return {
         "id": uid,
         "company_id": company_id,
         "email": email,
         "role": role,
         "token_version": int(token_version),
+        "panel_locale": panel_locale or "pt",
     }
 
 
@@ -141,6 +142,7 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
         "email": user["email"],
         "role": user["role"],
         "company_id": str(user["company_id"]),
+        "panel_locale": user.get("panel_locale") or "pt",
     }
 
 

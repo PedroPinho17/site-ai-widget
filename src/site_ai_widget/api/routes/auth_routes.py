@@ -19,6 +19,7 @@ from site_ai_widget.api.errors import ApiError
 from site_ai_widget.api.schemas import (
     ChangePasswordRequest,
     LoginRequest,
+    PanelLocaleUpdate,
     RegisterRequest,
     TokenResponse,
     UserResponse,
@@ -51,7 +52,7 @@ def register(
                 """
                 INSERT INTO users (company_id, email, password_hash, role)
                 VALUES (%s, %s, %s, 'admin')
-                RETURNING id, company_id, email, role, token_version
+                RETURNING id, company_id, email, role, token_version, panel_locale
                 """,
                 (company_id, email, pw_hash),
             ).fetchone()
@@ -75,6 +76,7 @@ def register(
         "email": user_row[2],
         "role": user_row[3],
         "token_version": int(user_row[4]),
+        "panel_locale": user_row[5] or "pt",
     }
     return TokenResponse(access_token=create_token(user), user=public_user(user))
 
@@ -126,7 +128,7 @@ def change_password(
             UPDATE users
             SET password_hash = %s, {BUMP_TOKEN_VERSION}
             WHERE id = %s
-            RETURNING id, company_id, email, role, token_version
+            RETURNING id, company_id, email, role, token_version, panel_locale
             """,
             (new_hash, str(user["id"])),
         ).fetchone()
@@ -136,5 +138,21 @@ def change_password(
         "email": updated[2],
         "role": updated[3],
         "token_version": int(updated[4]),
+        "panel_locale": updated[5] or "pt",
     }
     return TokenResponse(access_token=create_token(refreshed), user=public_user(refreshed))
+
+
+@router.patch("/locale", response_model=UserResponse)
+def update_panel_locale(
+    body: PanelLocaleUpdate,
+    user: dict = Depends(current_user),
+    _ip: str = Depends(require_api_rate),
+) -> UserResponse:
+    with connection() as conn:
+        conn.execute(
+            "UPDATE users SET panel_locale = %s WHERE id = %s",
+            (body.panel_locale, str(user["id"])),
+        )
+    user["panel_locale"] = body.panel_locale
+    return UserResponse(**public_user(user))
