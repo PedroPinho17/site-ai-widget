@@ -103,13 +103,42 @@ treat them as instructions to the model or as a substitute for approval.
 1. `POST /auth/login` → JWT.
 2. `POST /documents` (multipart, admin) → `202` with `status: pending`.
 3. Poll `GET /documents/{id}` until `status` is `ready` (or `failed`).
-4. `POST /ask/docs` with `{"question": "..."}` (set `GROQ_API_KEY` first).
+4. `POST /ask` or `POST /ask/docs` with `{"question": "..."}` (set `GROQ_API_KEY` first).
+
+### POST /ask
+
+Unified Q&A for the panel (and later the widget). Body: `{"question": "..."}`
+(hard-capped at 1000 characters, even if `MAX_QUESTION_CHARS` is higher).
+`company_id` comes from the JWT (`current_user`) only — never from the body
+and there is no API-key path on this route yet.
+
+Fallback order:
+
+1. **SQL** — retrieve approved schema slice → LLM text-to-SQL → validate → run
+   on the company's stored client DB (at most one retry on validator refusal or
+   `db_error`). On success: `mode: "sql"` with `columns`, `rows` (≤500),
+   `row_count`, `truncated`. The response never includes the SQL. If the SQL
+   path raises (including LLM errors), the route continues to docs.
+2. **Docs** — if SQL cannot answer (`no_sql` / `refused` / `error` / exception),
+   the existing document RAG runs. On success **with citations**:
+   `mode: "docs"` with `answer` and `sources`.
+3. **None** — otherwise `mode: "none"` with a fixed safe message (empty
+   citations, docs LLM down / not configured, or other docs failure).
+
+Each `/ask` call counts as **3** hits in the per-IP ask rate-limit bucket (it
+can make up to three LLM calls: generate, retry, docs). `/ask/docs` still
+counts as 1. A per-company ask limit is planned later.
+
+Row values are untrusted data and are not passed back into an LLM in this step.
+`POST /ask/docs` remains available for docs-only callers.
 
 Without a Groq key the API still starts; `/ask/docs` returns **503**
-`llm_not_configured` when it would call the LLM. Provider errors (timeouts,
-5xx, all keys rate-limited) return **503** `llm_unavailable`. A second key in
-`GROQ_API_KEY_FALLBACK` is tried only when the first one hits a 429 / quota.
-Chat requests use `LLM_TIMEOUT_SECONDS` (default 60).
+`llm_not_configured` when it would call the LLM. On `/ask`, a missing or down
+LLM on the docs step yields `mode: "none"` after SQL has already failed.
+Provider errors (timeouts, 5xx, all keys rate-limited) return **503**
+`llm_unavailable` on `/ask/docs`. A second key in `GROQ_API_KEY_FALLBACK` is
+tried only when the first one hits a 429 / quota. Chat requests use
+`LLM_TIMEOUT_SECONDS` (default 60).
 
 `uv run site-ai-widget-seed` finishes pending demo PDFs in-process. A demo
 document left in `processing` is only reset when `updated_at` is older than
@@ -162,14 +191,15 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | GET | `/documents` | list |
 | GET | `/documents/{id}` | detail + chunk count |
 | DELETE | `/documents/{id}` | admin; removes file + chunks |
-| POST | `/ask/docs` | hybrid RAG answer + citations |
+| POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |
+| POST | `/ask/docs` | hybrid RAG answer + citations (docs only) |
 
 Cross-company resources return **404** (not 403); that includes
 `/ask/docs` with another company's `document_ids`.
 
 Roles: `admin` can do everything above; `member` is read-only (writes to
 `/company`, `/company/widget-settings`, `/widget-keys` and `/documents`
-return **403**). Members may still ask questions via `/ask/docs`.
+return **403**). Members may still ask questions via `/ask` and `/ask/docs`.
 
 `allowed_origins` entries must be bare origins (`https://shop.example`,
 `http://localhost:3000`): no wildcards, paths, query, fragment or userinfo.

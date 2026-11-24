@@ -60,8 +60,11 @@ RETRY_HINTS: dict[str, str] = {
     "parse_error": "write valid PostgreSQL",
     "too_long": "write a shorter query",
     "empty": "write a SELECT query",
+    # Runner failures that a simpler rewrite may fix (pipeline retry).
+    "db_error": "write a simpler read-only query that the database can run",
 }
 GENERIC_RETRY_HINT = "follow every rule above"
+_HINT_VALUES = frozenset(RETRY_HINTS.values()) | {GENERIC_RETRY_HINT}
 
 _FENCE_RE = re.compile(
     r"^```(?:postgresql|postgres|pgsql|sql)?[ \t]*\n?(.*?)\n?```\s*$",
@@ -109,9 +112,18 @@ def build_sql_messages(
 
 
 def retry_hint(previous_error: str | SQLRejected) -> str:
-    """Fixed hint for a rejection reason; unknown reasons get a generic hint."""
+    """Fixed hint for a rejection reason; unknown reasons get a generic hint.
+
+    Passing an already-resolved hint string is idempotent (pipeline may pass
+    ``retry_hint(reason)`` into ``generate_sql``).
+    """
     reason = previous_error.reason if isinstance(previous_error, SQLRejected) else previous_error
-    return RETRY_HINTS.get(str(reason).strip(), GENERIC_RETRY_HINT)
+    text = str(reason).strip()
+    if text in RETRY_HINTS:
+        return RETRY_HINTS[text]
+    if text in _HINT_VALUES:
+        return text
+    return GENERIC_RETRY_HINT
 
 
 def generate_sql(

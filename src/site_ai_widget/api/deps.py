@@ -70,10 +70,19 @@ def require_api_rate(request: Request) -> str:
 
 
 def require_ask_rate(request: Request) -> str:
-    """Document Q&A rate limit per client IP."""
+    """Document Q&A rate limit per client IP (one slot — ``/ask/docs``)."""
+    return _ask_rate(request, weight=1)
+
+
+def require_ask_rate_triple(request: Request) -> str:
+    """``/ask`` rate limit: three slots (SQL generate + retry + docs LLM)."""
+    return _ask_rate(request, weight=3)
+
+
+def _ask_rate(request: Request, *, weight: int) -> str:
     _, _, limiter = _ensure_limiters()
     ip = resolve_client_ip(request)
-    limiter.check(f"ask:{ip}")
+    limiter.check(f"ask:{ip}", n=weight)
     return ip
 
 

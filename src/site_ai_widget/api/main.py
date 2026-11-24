@@ -11,7 +11,16 @@ from fastapi.responses import JSONResponse
 from site_ai_widget.api.body_limit import BodySizeLimitMiddleware, default_limit_for
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError, api_error_handler
-from site_ai_widget.api.routes import ask_docs, auth_routes, company, db_connection, documents, health, widget_keys
+from site_ai_widget.api.routes import (
+    ask,
+    ask_docs,
+    auth_routes,
+    company,
+    db_connection,
+    documents,
+    health,
+    widget_keys,
+)
 from site_ai_widget.db import pool as db_pool
 from site_ai_widget.docs.storage import upload_root
 from site_ai_widget.docs.worker import recover_stuck_documents, shutdown_worker
@@ -106,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(widget_keys.router)
     app.include_router(documents.router)
     app.include_router(ask_docs.router)
+    app.include_router(ask.router)
     app.include_router(db_connection.router)
     return app
 
