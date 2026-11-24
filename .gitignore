@@ -1,3 +1,7 @@
+# Node (admin panel)
+node_modules/
+coverage/
+
 # Python
 __pycache__/
 *.py[oc]
@@ -12,6 +16,7 @@ wheels/
 .env.*
 .env*
 !.env.example
+!panel/.env.example
 *.pem
 *.key
 

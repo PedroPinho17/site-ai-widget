@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from site_ai_widget.api.body_limit import BodySizeLimitMiddleware, default_limit_for
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError, api_error_handler
+from site_ai_widget.api.panel_cors import PanelCorsMiddleware
 from site_ai_widget.api.routes import (
     ask,
     ask_docs,
@@ -91,8 +92,10 @@ def create_app() -> FastAPI:
         BodySizeLimitMiddleware,
         limit_for=default_limit_for(settings.max_upload_bytes),
     )
-    # Outermost so preflight is answered here. Scoped to /v1/widget/* — not a
-    # global wildcard CORS middleware.
+    # Non-widget routes only. PANEL_ORIGINS, never "*", never credentials.
+    app.add_middleware(PanelCorsMiddleware)
+    # Outermost so widget preflight is answered here. Scoped to /v1/widget/*
+    # — not a global wildcard CORS middleware.
     app.add_middleware(WidgetCorsMiddleware)
 
     @app.exception_handler(RequestValidationError)

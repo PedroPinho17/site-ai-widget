@@ -191,6 +191,13 @@ def normalize_origins(values: list[str]) -> list[str]:
     return out
 
 
+def parse_panel_origins(raw: str) -> tuple[str, ...]:
+    """Comma-separated panel origins. Empty means none. Never ``*``."""
+    if not isinstance(raw, str):
+        raise ValueError("PANEL_ORIGINS must be a string")
+    return tuple(normalize_origins([item for item in raw.split(",") if item.strip()]))
+
+
 class WidgetKeyCreate(BaseModel):
     # Empty list means NO origin is allowed (deny-all), never allow-all.
     allowed_origins: list[str] = Field(default_factory=list, max_length=MAX_ORIGINS)

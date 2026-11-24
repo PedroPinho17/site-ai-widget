@@ -9,6 +9,7 @@ from site_ai_widget.api.schemas import (
     WidgetKeyCreate,
     WidgetKeyUpdate,
     normalize_origin,
+    parse_panel_origins,
 )
 
 
@@ -113,3 +114,36 @@ def test_too_many_origins_rejected():
     many = [f"https://s{i}.example" for i in range(MAX_ORIGINS + 1)]
     with pytest.raises(ValidationError):
         WidgetKeyCreate(allowed_origins=many)
+
+
+def test_parse_panel_origins_canonicalises_and_skips_blanks():
+    assert parse_panel_origins("http://127.0.0.1:5173, http://localhost:5173,") == (
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    )
+    assert parse_panel_origins("") == ()
+    assert parse_panel_origins("   ") == ()
+
+
+@pytest.mark.parametrize("raw", ["*", "https://*", "https://*.example.com", "https://shop.example/path"])
+def test_parse_panel_origins_rejects_wildcard_and_path(raw):
+    with pytest.raises(ValueError):
+        parse_panel_origins(raw)
+
+
+def _shared_cases() -> list[dict]:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "fixtures" / "origin_cases.json"
+    return json.loads(path.read_text(encoding="utf-8"))["cases"]
+
+
+@pytest.mark.parametrize("case", _shared_cases(), ids=lambda c: repr(c["input"]))
+def test_shared_origin_cases_match_the_panel(case):
+    """Same vectors as panel/src/test/origin.test.ts, so both sides agree."""
+    if case["expected"] is None:
+        with pytest.raises(ValueError):
+            normalize_origin(case["input"])
+    else:
+        assert normalize_origin(case["input"]) == case["expected"]

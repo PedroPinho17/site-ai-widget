@@ -241,6 +241,25 @@ the Docker bridge CIDR only when the proxy runs on it and is the only way in).
 > tenants share one per-IP bucket (for example the connection-test limit of 10
 > per 10 minutes on `/db-connection`) and one busy company blocks the others.
 
+### Admin panel
+
+The company admin UI is in `panel/` (Vite, React, TypeScript). It calls the
+existing `/auth/login`, `/company` and `/widget-keys` routes. Copy
+`panel/.env.example` to set `VITE_API_URL` if the API is not on
+`http://127.0.0.1:8002`. The JWT is stored in memory and `sessionStorage`
+(never `localStorage`, never a cookie).
+
+```bash
+cd panel
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173` and sign in with a company admin. The API must
+list that origin in `PANEL_ORIGINS` (default
+`http://127.0.0.1:5173,http://localhost:5173`). Widget CORS is separate and
+unchanged.
+
 ## Tests
 
 ```bash

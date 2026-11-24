@@ -33,6 +33,16 @@ def test_valid_settings_load(clean_env):
     assert s.jwt_secret == GOOD_SECRET
     assert s.database_url == GOOD_DB
     assert s.trusted_proxy_ips == ""
+    assert s.panel_origin_set() == frozenset({"http://127.0.0.1:5173", "http://localhost:5173"})
+
+
+def test_panel_origins_wildcard_refused(clean_env):
+    clean_env.setenv("JWT_SECRET", GOOD_SECRET)
+    clean_env.setenv("DATABASE_URL", GOOD_DB)
+    clean_env.setenv("PANEL_ORIGINS", "*")
+    with pytest.raises(ValidationError) as exc:
+        _settings()
+    assert "panel_origins" in _error_fields(exc.value)
 
 
 def test_missing_jwt_secret_refused(clean_env):

@@ -8,6 +8,8 @@ from cryptography.fernet import Fernet
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from site_ai_widget.api.schemas import parse_panel_origins
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -22,6 +24,8 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8002, ge=1, le=65535)
     enable_docs: bool = False
     jwt_hours: int = Field(default=8, ge=1, le=168)
+    # Comma-separated origins of the admin panel. Never "*", never credentials.
+    panel_origins: str = Field(default="http://127.0.0.1:5173,http://localhost:5173")
 
     # Comma-separated IPs/CIDRs of reverse proxies whose forwarding headers we trust.
     # Empty string → loopback only (127.0.0.1, ::1).
@@ -93,6 +97,16 @@ class Settings(BaseSettings):
             if not sep or not host or not port.isdigit() or not 1 <= int(port) <= 65535:
                 raise ValueError("CLIENTDB_ALLOWED_HOSTS must be a comma-separated list of host:port.")
         return value
+
+    @field_validator("panel_origins")
+    @classmethod
+    def panel_origins_valid(cls, value: str) -> str:
+        parse_panel_origins(value)
+        return value
+
+    def panel_origin_set(self) -> frozenset[str]:
+        """Canonical panel origins that may call the API from a browser."""
+        return frozenset(parse_panel_origins(self.panel_origins))
 
     def clientdb_allowlist(self) -> frozenset[tuple[str, int]]:
         """CLIENTDB_ALLOWED_HOSTS as (host, port) pairs, host in lowercase."""

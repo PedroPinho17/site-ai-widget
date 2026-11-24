@@ -223,6 +223,14 @@ def test_member_cannot_write_but_can_read(client):
     assert len(keys) == 1 and keys[0]["is_active"] is True
 
 
+def test_widget_keys_require_jwt(client):
+    listed = client.get("/widget-keys")
+    assert listed.status_code == 401
+    assert listed.json()["detail"]["code"] == "session_invalid"
+    created = client.post("/widget-keys", json={"allowed_origins": []})
+    assert created.status_code == 401
+
+
 def test_widget_key_origins_are_canonicalised_and_validated(client):
     token, _, _ = _register(client)
     auth_h = {"Authorization": f"Bearer {token}"}
@@ -239,6 +247,21 @@ def test_widget_key_origins_are_canonicalised_and_validated(client):
     )
     assert bad.status_code == 422
     assert bad.json()["detail"]["code"] == "validation_error"
+
+    key_id = ok.json()["id"]
+    for origin in ("https://shop.example/path", "https://shop.example/", "*", "http://ok.example/*"):
+        patched = client.patch(
+            f"/widget-keys/{key_id}",
+            headers=auth_h,
+            json={"allowed_origins": [origin]},
+        )
+        # Trailing slash is canonicalised; everything else is 422.
+        if origin == "https://shop.example/":
+            assert patched.status_code == 200, patched.text
+            assert patched.json()["allowed_origins"] == ["https://shop.example"]
+        else:
+            assert patched.status_code == 422, origin
+            assert patched.json()["detail"]["code"] == "validation_error"
 
 
 def test_explicit_null_fields_are_ignored_not_500(client):
