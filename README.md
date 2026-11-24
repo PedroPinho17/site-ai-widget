@@ -288,6 +288,11 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | GET | `/documents` | list |
 | GET | `/documents/{id}` | detail + chunk count |
 | DELETE | `/documents/{id}` | admin; removes file + chunks |
+| GET/PUT | `/db-connection` | saved client DB (password never returned) |
+| POST | `/db-connection/test` | re-test saved connection |
+| POST | `/db-connection/introspect` | reload client schema |
+| GET | `/db-connection/schema` | introspected tables/columns |
+| PUT | `/db-connection/schema/approval` | approve tables for the widget |
 | POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |
 | POST | `/ask/docs` | hybrid RAG answer + citations (docs only) |
 | GET | `/embed.js` | widget script (`application/javascript`) |

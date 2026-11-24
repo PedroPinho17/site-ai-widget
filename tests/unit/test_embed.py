@@ -130,7 +130,7 @@ def test_embed_js_parses():
 
 
 @pytest.mark.skipif(not postgres_available(), reason="Postgres is not reachable (docker compose up -d db)")
-def test_demo_origin_allowed_and_other_origin_refused(monkeypatch):
+def test_demo_origin_allowed_and_other_origin_refused(monkeypatch, demo_key_restored):
     """The demo page origin may ask; any other origin is refused before the question runs."""
     from site_ai_widget.api.config import clear_settings_cache
     from site_ai_widget.api.deps import reset_limiters
@@ -165,22 +165,16 @@ def test_demo_origin_allowed_and_other_origin_refused(monkeypatch):
     monkeypatch.setattr("site_ai_widget.sqlqa.pipeline.answer_with_sql", fake_sql)
 
     with connection() as conn:
-        row = conn.execute(
-            "SELECT company_id FROM widget_keys WHERE public_key = %s",
-            (DEMO_WIDGET_KEY,),
-        ).fetchone()
-        if row:
-            company_id = row[0]
-        else:
-            created = conn.execute(
-                """
-                INSERT INTO companies (name, slug, default_locale)
-                VALUES (%s, %s, 'pt')
-                RETURNING id
-                """,
-                ("Mercearia Atlas", f"mercearia-demo-{uuid4().hex[:8]}"),
-            ).fetchone()
-            company_id = created[0]
+        # A throwaway fictional company. demo_key_restored puts the key back on
+        # its real owner afterwards; the test never creates Mercearia Atlas.
+        company_id = conn.execute(
+            """
+            INSERT INTO companies (name, slug, default_locale)
+            VALUES (%s, %s, 'pt')
+            RETURNING id
+            """,
+            ("Embed Test Shop", f"embed-test-{uuid4().hex[:8]}"),
+        ).fetchone()[0]
         ensure_demo_widget_key(conn, company_id)
 
     close_pool()

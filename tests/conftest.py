@@ -95,3 +95,36 @@ def settings_env(monkeypatch):
     clear_settings_cache()
     yield monkeypatch
     clear_settings_cache()
+
+
+@pytest.fixture
+def demo_key_restored():
+    """Snapshot the public demo widget key and put it back after the test.
+
+    Tests that move ``wk_demo_mercearia_atlas`` onto a throwaway company must not
+    leave it there (the Atlas admin would lose it) and must never create the
+    real Mercearia Atlas company themselves (the seed would then skip its admin).
+    """
+    from site_ai_widget.db.pool import close_pool, connection
+    from site_ai_widget.seed import DEMO_WIDGET_KEY
+
+    close_pool()
+    with connection() as conn:
+        before = conn.execute(
+            "SELECT company_id, allowed_origins, is_active FROM widget_keys WHERE public_key = %s",
+            (DEMO_WIDGET_KEY,),
+        ).fetchone()
+    yield
+    close_pool()
+    with connection() as conn:
+        if before is None:
+            conn.execute("DELETE FROM widget_keys WHERE public_key = %s", (DEMO_WIDGET_KEY,))
+        else:
+            conn.execute(
+                """
+                UPDATE widget_keys SET company_id = %s, allowed_origins = %s, is_active = %s
+                WHERE public_key = %s
+                """,
+                (before[0], before[1], before[2], DEMO_WIDGET_KEY),
+            )
+    close_pool()

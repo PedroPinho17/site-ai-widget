@@ -466,6 +466,63 @@ def test_schema_requires_login(client):
     assert client.get(f"{URL}/schema").status_code == 401
 
 
+def test_schema_approval_requires_login(client):
+    assert client.put(f"{URL}/schema/approval", json={"approved_table_ids": []}).status_code == 401
+
+
+def test_schema_approval_bulk_and_isolation(client):
+    headers, _ = connected_and_introspected(client)
+    schema = schema_of(client, headers)
+    products = table_of(schema, "products")["id"]
+    stores = table_of(schema, "stores")["id"]
+
+    r = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [products, stores]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    by_name = {t["name"]: t for t in r.json()["tables"]}
+    assert by_name["products"]["status"] == "approved"
+    assert by_name["stores"]["status"] == "approved"
+    assert "password" not in r.text
+
+    r = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [products]},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    by_name = {t["name"]: t for t in r.json()["tables"]}
+    assert by_name["products"]["status"] == "approved"
+    assert by_name["stores"]["status"] == "pending"
+
+    headers_b, _ = register(client)
+    foreign = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [products]},
+        headers=headers_b,
+    )
+    assert foreign.status_code == 404
+    assert foreign.json()["detail"]["code"] == "not_found"
+    # Original company still has its approval.
+    assert table_of(schema_of(client, headers), "products")["status"] == "approved"
+
+
+def test_save_connection_never_returns_password_with_sslmode(client):
+    headers, _ = register(client)
+    r = client.put(URL, json=body(sslmode="disable"), headers=headers)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "password" not in data
+    assert "sslmode" not in data  # write-only; not echoed
+    assert os.environ["ATLAS_READONLY_PASSWORD"] not in r.text
+    got = client.get(URL, headers=headers)
+    assert got.status_code == 200
+    assert "password" not in got.json()
+    assert "sslmode" not in got.json()
+
+
 def schema_of(client: TestClient, headers: dict) -> dict:
     r = client.get(f"{URL}/schema", headers=headers)
     assert r.status_code == 200, r.text
@@ -1027,3 +1084,46 @@ def test_busy_probe_is_503_and_keeps_the_saved_status(client):
     assert _connection_state(company_id) == before  # status, last_error, time, DSN untouched
     # Once the session is free again, the test runs normally.
     assert client.post(f"{URL}/test", headers=headers).json()["status"] == "ok"
+
+
+def test_schema_approval_starts_pending_is_atomic_and_admin_only(client):
+    """New tables start not approved; a bad id leaves nothing half-saved; members get 403."""
+    from site_ai_widget.db.pool import connection
+
+    headers, company_id = connected_and_introspected(client)
+    schema = schema_of(client, headers)
+    assert {t["status"] for t in schema["tables"]} == {"pending"}
+    products = table_of(schema, "products")["id"]
+    stores = table_of(schema, "stores")["id"]
+
+    with connection() as conn:
+        conn.execute(
+            "UPDATE schema_tables SET is_present = false WHERE company_id = %s AND id = %s",
+            (company_id, products),
+        )
+    r = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [stores, products]},
+        headers=headers,
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "schema_not_present"
+    # stores was processed before the failure in id order or not: either way rolled back.
+    assert table_of(schema_of(client, headers), "stores")["status"] == "pending"
+
+    dup = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [stores, stores]},
+        headers=headers,
+    )
+    assert dup.status_code == 422
+
+    with connection() as conn:
+        conn.execute("UPDATE users SET role = 'member' WHERE company_id = %s", (company_id,))
+    member = client.put(
+        f"{URL}/schema/approval",
+        json={"approved_table_ids": [stores]},
+        headers=headers,
+    )
+    assert member.status_code == 403
+    assert table_of(schema_of(client, headers), "stores")["status"] == "pending"

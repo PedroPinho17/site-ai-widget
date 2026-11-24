@@ -4,7 +4,10 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "@/auth/AuthProvider";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { AppLayout } from "@/layout/AppLayout";
-import { ComingSoonPage, DashboardPage } from "@/pages/ComingSoonPage";
+import { ComingSoonPage } from "@/pages/ComingSoonPage";
+import { DashboardPage } from "@/pages/DashboardPage";
+import { DatabasePage } from "@/pages/DatabasePage";
+import { DocumentsPage } from "@/pages/DocumentsPage";
 import { KeysPage } from "@/pages/KeysPage";
 import { LoginPage } from "@/pages/LoginPage";
 
@@ -21,8 +24,8 @@ export function AppRoutes() {
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/documents" element={<ComingSoonPage title="Documents" />} />
-          <Route path="/database" element={<ComingSoonPage title="Database" />} />
+          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/database" element={<DatabasePage />} />
           <Route path="/conversations" element={<ComingSoonPage title="Conversations" />} />
           <Route path="/widget" element={<ComingSoonPage title="Widget" />} />
           <Route path="/keys" element={<KeysPage />} />

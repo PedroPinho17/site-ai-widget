@@ -22,6 +22,32 @@ const SAFE_BY_CODE: Record<string, string> = {
   rate_limited: "Too many requests. Try again shortly.",
   email_taken: "That email is already registered.",
   slug_taken: "That company slug is already taken.",
+  not_pdf: "Only PDF files are accepted.",
+  upload_too_large: "That file is too large.",
+  pdf_encrypted: "Encrypted PDFs are not supported.",
+  pdf_too_many_pages: "That PDF has too many pages.",
+  pdf_corrupt: "Could not read that PDF.",
+  document_duplicate: "That file was already uploaded.",
+  connections_not_configured: "Database connections are not configured.",
+  connection_unreadable: "The saved connection cannot be read. Save it again.",
+  db_host_invalid: "Invalid database host or port.",
+  db_host_unresolvable: "Could not resolve the database host.",
+  db_host_not_allowed: "That host is not allowed.",
+  db_unreachable: "Could not reach a PostgreSQL server at that host and port.",
+  db_auth_failed: "Wrong username or password for the database.",
+  db_not_found: "That database does not exist.",
+  db_version_unsupported: "PostgreSQL 13 or newer is required.",
+  db_user_can_write: "Use a read-only database user (SELECT only).",
+  db_no_readable_tables: "This user cannot read any table.",
+  db_connection_failed: "The database connection test failed.",
+  db_schema_too_large: "This database has too many tables or columns.",
+  db_timeout: "The database took too long to answer.",
+  db_busy: "Too many database checks are running. Try again shortly.",
+  db_schema_invalid: "The database sent invalid schema details.",
+  db_conflict_retry: "Another change conflicted. Try again.",
+  schema_not_present: "That table no longer exists in your database.",
+  column_sensitive: "A sensitive column cannot be approved.",
+  network_error: "Could not reach the server. Try again.",
 };
 
 function safeMessage(status: number, code: string): string {
@@ -41,6 +67,11 @@ function safeMessage(status: number, code: string): string {
     return "The server is unavailable. Try again shortly.";
   }
   return "Something went wrong. Try again.";
+}
+
+/** Fixed message for a known API / client check code (never raw server text). */
+export function messageForCode(code: string, fallback = "Something went wrong. Try again."): string {
+  return SAFE_BY_CODE[code] ?? fallback;
 }
 
 function readCode(data: unknown): string {
@@ -64,7 +95,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  if (init.body != null && !headers.has("Content-Type")) {
+  if (init.body != null && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -76,7 +107,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: "omit",
     });
   } catch {
-    throw new ApiRequestError(0, "network_error", "Could not reach the server. Try again.");
+    throw new ApiRequestError(0, "network_error", SAFE_BY_CODE.network_error);
   }
 
   const raw = await response.text();
@@ -97,6 +128,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     throw new ApiRequestError(response.status, code || "error", safeMessage(response.status, code));
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return data as T;
 }
 
@@ -113,6 +147,74 @@ export type WidgetKey = {
   allowed_origins: string[];
   is_active: boolean;
   created_at: string;
+};
+
+export type DocumentItem = {
+  id: string;
+  original_name: string;
+  size_bytes: number;
+  page_count: number | null;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type DbConnection = {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  status: string;
+  last_error: string | null;
+  last_checked_at: string | null;
+  last_introspected_at: string | null;
+  readable_tables?: number | null;
+};
+
+export type SslMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+export type DbConnectionSaveBody = {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslmode: SslMode;
+};
+
+export type SchemaColumn = {
+  id: string;
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  ordinal: number;
+  status: string;
+  is_sensitive: boolean;
+  description: string | null;
+  is_present: boolean;
+};
+
+export type SchemaTable = {
+  id: string;
+  schema_name: string;
+  name: string;
+  kind: string;
+  status: string;
+  ai_suggested: boolean;
+  description: string | null;
+  is_present: boolean;
+  columns: SchemaColumn[];
+};
+
+export type SchemaResponse = {
+  tables: SchemaTable[];
+};
+
+export type IntrospectResponse = {
+  tables: number;
+  columns: number;
+  removed_tables: number;
+  needs_review: number;
 };
 
 export type TokenResponse = {
@@ -160,5 +262,49 @@ export function updateKeyOriginsRequest(id: string, allowed_origins: string[]): 
   return api(`/widget-keys/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify({ allowed_origins }),
+  });
+}
+
+export function listDocumentsRequest(): Promise<DocumentItem[]> {
+  return api("/documents");
+}
+
+export function uploadDocumentRequest(file: File): Promise<DocumentItem> {
+  const body = new FormData();
+  body.append("file", file);
+  return api("/documents", { method: "POST", body });
+}
+
+export function deleteDocumentRequest(id: string): Promise<void> {
+  return api(`/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function getDbConnectionRequest(): Promise<DbConnection> {
+  return api("/db-connection");
+}
+
+export function saveDbConnectionRequest(body: DbConnectionSaveBody): Promise<DbConnection> {
+  return api("/db-connection", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function testDbConnectionRequest(): Promise<DbConnection> {
+  return api("/db-connection/test", { method: "POST" });
+}
+
+export function introspectDbRequest(): Promise<IntrospectResponse> {
+  return api("/db-connection/introspect", { method: "POST" });
+}
+
+export function getSchemaRequest(): Promise<SchemaResponse> {
+  return api("/db-connection/schema");
+}
+
+export function saveSchemaApprovalRequest(approved_table_ids: string[]): Promise<SchemaResponse> {
+  return api("/db-connection/schema/approval", {
+    method: "PUT",
+    body: JSON.stringify({ approved_table_ids }),
   });
 }

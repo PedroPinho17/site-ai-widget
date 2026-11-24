@@ -237,6 +237,7 @@ class DbConnectionSave(BaseModel):
     database: str = Field(min_length=1, max_length=63)
     username: str = Field(min_length=1, max_length=63)
     password: str = Field(min_length=1, max_length=200, repr=False)
+    sslmode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
 
     @field_validator("host", "database", "username", "password")
     @classmethod
@@ -258,6 +259,19 @@ class DbConnectionResponse(BaseModel):
     last_checked_at: datetime | None = None
     last_introspected_at: datetime | None = None
     readable_tables: int | None = None
+
+
+class SchemaApprovalUpdate(BaseModel):
+    """Tables the widget may query. Others that are still present become pending."""
+
+    approved_table_ids: list[UUID] = Field(default_factory=list, max_length=2000)
+
+    @field_validator("approved_table_ids")
+    @classmethod
+    def unique_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate table ids")
+        return value
 
 
 class IntrospectResponse(BaseModel):

@@ -207,13 +207,15 @@ def _seed_pdf(company_id, admin_id, demo: dict, database_url: str | None = None)
 def ensure_demo_widget_key(conn, company_id) -> None:
     """Allow the local demo page to call the Mercearia Atlas widget.
 
-    Adds ``DEMO_WIDGET_ORIGIN`` when it is missing and leaves every other
+    Always (re)assigns ``DEMO_WIDGET_KEY`` to ``company_id`` so a previous run
+    that attached it to a throwaway company cannot hide it from the Atlas
+    admin. Adds ``DEMO_WIDGET_ORIGIN`` when missing and leaves every other
     allowlisted origin in place. The key stays active so the demo page works
     after a re-seed. The raw value is a public embed id, not a credential.
     """
     origin = normalize_origin(DEMO_WIDGET_ORIGIN)
     row = conn.execute(
-        "SELECT allowed_origins FROM widget_keys WHERE public_key = %s",
+        "SELECT company_id, allowed_origins FROM widget_keys WHERE public_key = %s",
         (DEMO_WIDGET_KEY,),
     ).fetchone()
     if row is None:
@@ -225,7 +227,7 @@ def ensure_demo_widget_key(conn, company_id) -> None:
             (str(company_id), DEMO_WIDGET_KEY, [origin]),
         )
     else:
-        origins = list(row[0] or [])
+        origins = list(row[1] or [])
         if origin not in origins:
             origins.append(origin)
         conn.execute(
@@ -236,7 +238,47 @@ def ensure_demo_widget_key(conn, company_id) -> None:
             """,
             (str(company_id), origins, DEMO_WIDGET_KEY),
         )
+        if str(row[0]) != str(company_id):
+            log.info(
+                "Moved demo widget key onto company %s (was on another company)",
+                DEMO_WIDGET_SLUG,
+            )
     log.info("Allowlisted demo widget origin for %s", DEMO_WIDGET_SLUG)
+
+
+def _ensure_admin_and_settings(conn, company_id, demo: dict, password: str) -> None:
+    """Create the demo admin and widget settings when the company has none."""
+    has_admin = conn.execute(
+        "SELECT 1 FROM users WHERE company_id = %s AND role = 'admin' LIMIT 1",
+        (str(company_id),),
+    ).fetchone()
+    if not has_admin:
+        added = conn.execute(
+            """
+            INSERT INTO users (company_id, email, password_hash, role)
+            VALUES (%s, %s, %s, 'admin')
+            ON CONFLICT (email) DO NOTHING
+            RETURNING id
+            """,
+            (str(company_id), demo["email"], hash_password(password)),
+        ).fetchone()
+        if added:
+            log.info("Added missing admin for %s", demo["slug"])
+    conn.execute(
+        """
+        INSERT INTO widget_settings
+            (company_id, primary_color, greeting, locale, assistant_name)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (company_id) DO NOTHING
+        """,
+        (
+            str(company_id),
+            demo["primary_color"],
+            demo["greeting"],
+            demo["locale"],
+            demo["assistant_name"],
+        ),
+    )
 
 
 def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> list[str]:
@@ -256,6 +298,9 @@ def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> li
             if existing:
                 company_id = existing[0]
                 log.info("Skip existing company %s", demo["slug"])
+                # A bare row (e.g. left by a test or an interrupted run) must
+                # not lock the demo admin out: add whatever is missing.
+                _ensure_admin_and_settings(conn, company_id, demo, password)
             else:
                 company = conn.execute(
                     """

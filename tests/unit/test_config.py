@@ -78,3 +78,18 @@ def test_blank_database_url_refused(clean_env, url):
     with pytest.raises(ValidationError) as exc:
         _settings()
     assert "database_url" in _error_fields(exc.value)
+
+
+def test_panel_upload_limit_matches_api_default():
+    """panel/src/lib/documents.ts mirrors MAX_UPLOAD_MB; the two must not drift."""
+    import re
+    from pathlib import Path
+
+    from site_ai_widget.api.config import Settings
+
+    source = (Path(__file__).resolve().parents[2] / "panel" / "src" / "lib" / "documents.ts").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"export const MAX_UPLOAD_MB = (\d+);", source)
+    assert match is not None
+    assert int(match.group(1)) == Settings.model_fields["max_upload_mb"].default

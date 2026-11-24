@@ -124,5 +124,9 @@ def test_other_errors_are_generic():
 
 
 def test_params_round_trip_through_conninfo():
-    params = ConnectionParams("db.example.com", 6543, "shop", "reader", "p a's\\s w")
+    params = ConnectionParams(
+        "db.example.com", 6543, "shop", "reader", "p a's\\s w", sslmode="require"
+    )
     assert params_from_conninfo(build_conninfo(params)) == params
+    info = conninfo_to_dict(build_conninfo(params))
+    assert info["sslmode"] == "require"

@@ -12,6 +12,7 @@ from site_ai_widget.api.schemas import (
     DbConnectionResponse,
     DbConnectionSave,
     IntrospectResponse,
+    SchemaApprovalUpdate,
     SchemaColumnResponse,
     SchemaColumnUpdate,
     SchemaResponse,
@@ -162,6 +163,7 @@ def save_connection(
         database=body.database,
         username=body.username,
         password=body.password,
+        sslmode=body.sslmode,
     )
     # Encrypt first: without CONNECTIONS_KEY we stop (503) before touching the client DB.
     token = encrypt_dsn(build_conninfo(params))
@@ -323,6 +325,45 @@ def suggest_schema(
 def get_schema(user: dict = Depends(panel_user)) -> SchemaResponse:
     with connection() as conn:
         return SchemaResponse(tables=_load_tables(conn, str(user["company_id"])))
+
+
+@router.put("/schema/approval", response_model=SchemaResponse)
+def save_schema_approval(
+    body: SchemaApprovalUpdate,
+    user: dict = Depends(require_admin),
+) -> SchemaResponse:
+    """Set which present tables the widget may query.
+
+    Tables in ``approved_table_ids`` become approved (safe pending columns too).
+    Other present tables that were approved become pending. Missing or foreign
+    ids are 404. Absent tables cannot be approved (409).
+    """
+    company_id = str(user["company_id"])
+    wanted = {str(tid) for tid in body.approved_table_ids}
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, status, is_present FROM schema_tables
+            WHERE company_id = %s
+            ORDER BY id
+            FOR UPDATE
+            """,
+            (company_id,),
+        ).fetchall()
+        known = {str(row[0]) for row in rows}
+        unknown = wanted - known
+        if unknown:
+            raise ApiError("not_found", 404)
+        for table_id, status, is_present in rows:
+            tid = str(table_id)
+            if tid in wanted:
+                if not is_present:
+                    raise ApiError("schema_not_present", 409)
+                if status != "approved":
+                    update_table(conn, company_id, tid, {"status": "approved"})
+            elif status == "approved" and is_present:
+                update_table(conn, company_id, tid, {"status": "pending"})
+        return SchemaResponse(tables=_load_tables(conn, company_id))
 
 
 @router.patch("/schema/tables/{table_id}", response_model=SchemaTableResponse)

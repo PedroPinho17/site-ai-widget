@@ -8,14 +8,3 @@ export function ComingSoonPage({ title }: { title: string }) {
     </Card>
   );
 }
-
-export function DashboardPage() {
-  return (
-    <Card>
-      <CardTitle>Dashboard</CardTitle>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Use the sidebar to manage widget keys and allowed origins. Other sections are coming soon.
-      </p>
-    </Card>
-  );
-}

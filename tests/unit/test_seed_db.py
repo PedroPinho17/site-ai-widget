@@ -125,6 +125,73 @@ def test_reseed_recovers_stuck_processing_past_threshold(seed_env):
     assert chunks >= 1
 
 
+def test_demo_widget_key_moves_to_the_seeded_company(seed_env, demo_key_restored):
+    """Regression: a key left on another company is moved to the one being seeded."""
+    from site_ai_widget.db.pool import connection
+    from site_ai_widget.seed import DEMO_WIDGET_KEY, DEMO_WIDGET_ORIGIN, ensure_demo_widget_key
+
+    def owner(conn):
+        return conn.execute(
+            "SELECT company_id, allowed_origins, is_active FROM widget_keys WHERE public_key = %s",
+            (DEMO_WIDGET_KEY,),
+        ).fetchone()
+
+    def company(conn, name):
+        return conn.execute(
+            "INSERT INTO companies (name, slug, default_locale) VALUES (%s, %s, 'pt') RETURNING id",
+            (name, f"keytest-{uuid.uuid4().hex[:8]}"),
+        ).fetchone()[0]
+
+    with connection() as conn:
+        wrong = company(conn, "Wrong Co")
+        right = company(conn, "Right Co")
+        ensure_demo_widget_key(conn, wrong)
+        conn.execute(
+            "UPDATE widget_keys SET is_active = false, allowed_origins = %s WHERE public_key = %s",
+            (["https://kept.example"], DEMO_WIDGET_KEY),
+        )
+        assert owner(conn)[0] == wrong
+
+        ensure_demo_widget_key(conn, right)
+        company_id, origins, active = owner(conn)
+    assert company_id == right
+    assert active is True
+    assert origins == ["https://kept.example", DEMO_WIDGET_ORIGIN]
+
+
+def test_seed_repairs_a_company_without_admin(seed_env):
+    """A bare company row with the demo slug must still get its admin and settings."""
+    from site_ai_widget.db.pool import connection
+    from site_ai_widget.seed import seed
+
+    demo = _demo()
+    with connection() as conn:
+        conn.execute(
+            "INSERT INTO companies (name, slug, default_locale) VALUES (%s, %s, 'pt')",
+            (demo["name"], demo["slug"]),
+        )
+    assert seed(demos=(demo,)) == []
+    with connection() as conn:
+        admin = conn.execute(
+            """
+            SELECT u.role FROM users u JOIN companies c ON c.id = u.company_id
+            WHERE c.slug = %s AND u.email = %s
+            """,
+            (demo["slug"], demo["email"]),
+        ).fetchone()
+        settings = conn.execute(
+            """
+            SELECT 1 FROM widget_settings w JOIN companies c ON c.id = w.company_id
+            WHERE c.slug = %s
+            """,
+            (demo["slug"],),
+        ).fetchone()
+    assert admin == ("admin",)
+    assert settings is not None
+    # Running again changes nothing and does not fail.
+    assert seed(demos=(demo,)) == []
+
+
 def test_reseed_leaves_fresh_processing_alone(seed_env):
     """A recently updated processing row is treated as an active worker job."""
     from site_ai_widget.db.pool import connection
