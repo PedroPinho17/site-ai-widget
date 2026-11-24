@@ -118,3 +118,14 @@ def test_check_many_order_does_not_matter():
     with pytest.raises(ApiError):
         limiter.check_many(("ip:shared", "company:c"))  # full bucket listed first
     assert "company:c" not in limiter._calls
+
+
+@pytest.mark.parametrize("budget", [1, 2, 3])
+def test_request_weight_capped_at_budget(budget):
+    """A weight larger than max_calls is capped so the first call can succeed."""
+    limiter = RateLimiter(max_calls=budget, per_seconds=60)
+    limiter.check("ask:ip", n=3)  # would be 3, but capped to budget
+    assert len(limiter._calls["ask:ip"]) == budget
+    with pytest.raises(ApiError) as exc:
+        limiter.check("ask:ip", n=3)
+    assert exc.value.code == "rate_limited"

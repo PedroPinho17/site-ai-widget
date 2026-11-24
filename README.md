@@ -120,10 +120,11 @@ Fallback order:
    `row_count`, `truncated`. The response never includes the SQL. If the SQL
    path raises (including LLM errors), the route continues to docs.
 2. **Docs** — if SQL cannot answer (`no_sql` / `refused` / `error` / exception),
-   the existing document RAG runs. On success **with citations**:
-   `mode: "docs"` with `answer` and `sources`.
-3. **None** — otherwise `mode: "none"` with a fixed safe message (empty
-   citations, docs LLM down / not configured, or other docs failure).
+   the existing document RAG runs. When search found matching text:
+   `mode: "docs"` with `answer` and `sources` (citations may be empty if the
+   answer has no `[n]` markers).
+3. **None** — otherwise `mode: "none"` with a fixed safe message (no matching
+   documents, docs LLM down / not configured, or other docs failure).
 
 Each `/ask` call counts as **3** hits in the per-IP ask rate-limit bucket (it
 can make up to three LLM calls: generate, retry, docs). `/ask/docs` still

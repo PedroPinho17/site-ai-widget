@@ -88,7 +88,7 @@ def test_ask_docs_503_without_groq_when_chunks_exist(ask_client, monkeypatch):
 
 
 def test_ask_rate_limit(monkeypatch):
-    monkeypatch.setenv("ASK_RATE_LIMIT", "2")
+    monkeypatch.setenv("ASK_RATE_LIMIT", "3")
     monkeypatch.setenv("ASK_RATE_LIMIT_WINDOW", "60")
     monkeypatch.setenv("GROQ_API_KEY", "")
     monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
@@ -112,14 +112,16 @@ def test_ask_rate_limit(monkeypatch):
         lambda *a, **k: [],
     )
 
-    with TestClient(app) as client:
-        assert client.post("/ask/docs", json={"question": "q1"}).status_code == 200
-        assert client.post("/ask/docs", json={"question": "q2"}).status_code == 200
-        blocked = client.post("/ask/docs", json={"question": "q3"})
-        assert blocked.status_code == 429
-        assert blocked.json()["detail"]["code"] == "rate_limited"
-
-    app.dependency_overrides.clear()
-    reset_limiters()
-    clear_settings_cache()
-    set_embedder(None)
+    try:
+        with TestClient(app) as client:
+            assert client.post("/ask/docs", json={"question": "q1"}).status_code == 200
+            assert client.post("/ask/docs", json={"question": "q2"}).status_code == 200
+            assert client.post("/ask/docs", json={"question": "q3"}).status_code == 200
+            blocked = client.post("/ask/docs", json={"question": "q4"})
+            assert blocked.status_code == 429
+            assert blocked.json()["detail"]["code"] == "rate_limited"
+    finally:
+        app.dependency_overrides.clear()
+        reset_limiters()
+        clear_settings_cache()
+        set_embedder(None)

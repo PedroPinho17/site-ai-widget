@@ -43,7 +43,8 @@ class Settings(BaseSettings):
     llm_base_url: str = Field(default="https://api.groq.com/openai/v1")
     llm_model: str = Field(default="openai/gpt-oss-120b")
     llm_timeout_seconds: float = Field(default=60.0, ge=5.0, le=300.0)
-    ask_rate_limit: int = Field(default=20, ge=1)
+    # Minimum 3 so /ask (weight 3) can succeed even on a fresh bucket.
+    ask_rate_limit: int = Field(default=20, ge=3)
     ask_rate_limit_window: int = Field(default=600, ge=1)
     # Seed (and similar tooling) only resets "processing" rows older than this,
     # so a live API worker is not interrupted mid-job.

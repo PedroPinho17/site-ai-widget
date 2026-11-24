@@ -59,7 +59,9 @@ class RateLimiter:
         client IP) therefore does not spend the others (say the company).
         """
         keys = list(dict.fromkeys(keys))
-        weight = max(1, int(n))
+        # Never ask for more than the bucket can hold, so a heavy /ask call does
+        # not always 429 when ASK_RATE_LIMIT is smaller than the request weight.
+        weight = min(max(1, int(n)), self.max_calls)
         now = time.monotonic()
         with self._lock:
             if now - self._last_sweep > self.per_seconds:
@@ -69,18 +71,10 @@ class RateLimiter:
             for key in keys:
                 calls = self._calls.get(key)
                 if calls is None:
-                    if weight > self.max_calls:
-                        err = ApiError("rate_limited", 429)
-                        err.headers = {"Retry-After": str(self.per_seconds)}
-                        raise err
                     continue
                 self._prune(calls, now)
                 if not calls:
                     del self._calls[key]
-                    if weight > self.max_calls:
-                        err = ApiError("rate_limited", 429)
-                        err.headers = {"Retry-After": str(self.per_seconds)}
-                        raise err
                     continue
                 if len(calls) + weight > self.max_calls:
                     retry = int(self.per_seconds - (now - calls[0])) + 1

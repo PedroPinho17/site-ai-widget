@@ -74,7 +74,8 @@ def ask_documents(
     chunks = hybrid_search(company_id, q, document_ids=document_ids)
     if not chunks:
         lang = _guess_lang(q)
-        return {"answer": NO_CONTEXT[lang], "citations": []}
+        # matched=False: search found no text (callers may map this to mode "none").
+        return {"answer": NO_CONTEXT[lang], "citations": [], "matched": False}
 
     if not settings.groq_keys() and llm_complete is None:
         raise ApiError("llm_not_configured", 503)
@@ -85,4 +86,5 @@ def ask_documents(
     log.info("ask/docs company=%s chunks=%s", company_id, len(chunks))
     answer = complete(messages, temperature=0)
     citations = map_citations(answer, chunks)
-    return {"answer": answer, "citations": citations}
+    # matched=True even when the answer has no [n] markers (citations may be empty).
+    return {"answer": answer, "citations": citations, "matched": True}

@@ -60,6 +60,7 @@ def _docs_hit(**kwargs):
                 "page": 1,
             }
         ],
+        "matched": True,
     }
 
 
@@ -153,7 +154,8 @@ def test_sql_exception_falls_through_to_docs_then_none(ask_app, monkeypatch, exc
     assert "llm_unavailable" not in r.text
 
 
-def test_empty_citations_is_mode_none(ask_app, monkeypatch):
+def test_docs_found_without_citation_markers_is_docs_mode(ask_app, monkeypatch):
+    """Search hit text but the answer has no [n] → still mode docs, empty sources."""
     client, _, _ = ask_app
     monkeypatch.setattr(
         "site_ai_widget.api.routes.ask.answer_with_sql",
@@ -161,7 +163,33 @@ def test_empty_citations_is_mode_none(ask_app, monkeypatch):
     )
     monkeypatch.setattr(
         "site_ai_widget.api.routes.ask.ask_documents",
-        lambda **kwargs: {"answer": "No useful docs.", "citations": []},
+        lambda **kwargs: {
+            "answer": "Horario de abertura sem marcador.",
+            "citations": [],
+            "matched": True,
+        },
+    )
+    r = client.post("/ask", json={"question": "q"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "docs"
+    assert body["answer"]
+    assert body["sources"] == []
+
+
+def test_no_docs_matched_is_mode_none(ask_app, monkeypatch):
+    client, _, _ = ask_app
+    monkeypatch.setattr(
+        "site_ai_widget.api.routes.ask.answer_with_sql",
+        lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+    )
+    monkeypatch.setattr(
+        "site_ai_widget.api.routes.ask.ask_documents",
+        lambda **kwargs: {
+            "answer": "I could not find relevant information in the uploaded documents.",
+            "citations": [],
+            "matched": False,
+        },
     )
     r = client.post("/ask", json={"question": "q"})
     assert r.status_code == 200
@@ -310,8 +338,8 @@ def test_docs_api_error_logged_code_only(ask_app, monkeypatch, caplog):
     assert SENTINEL_Q not in text
 
 
-def test_unexpected_exception_500_no_leak(ask_app, monkeypatch):
-    client, company_id, user = ask_app
+def test_docs_unexpected_exception_is_mode_none_no_leak(ask_app, monkeypatch, caplog):
+    client, _, _ = ask_app
     monkeypatch.setattr(
         "site_ai_widget.api.routes.ask.answer_with_sql",
         lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
@@ -321,29 +349,27 @@ def test_unexpected_exception_500_no_leak(ask_app, monkeypatch):
         raise RuntimeError(f"SECRET-{SENTINEL_Q}-{SENTINEL_SELECT}")
 
     monkeypatch.setattr("site_ai_widget.api.routes.ask.ask_documents", boom)
-
-    # Do not raise server exceptions into the test — assert the HTTP 500 body.
-    client_safe = TestClient(client.app, raise_server_exceptions=False)
-    from site_ai_widget.api import auth as auth_mod
-
-    client.app.dependency_overrides[auth_mod.current_user] = lambda: user
-    r = client_safe.post("/ask", json={"question": SENTINEL_Q})
-    assert r.status_code == 500
+    with caplog.at_level(logging.WARNING, logger="site_ai_widget"):
+        r = client.post("/ask", json={"question": SENTINEL_Q})
+    assert r.status_code == 200
+    assert r.json()["mode"] == "none"
     assert "SECRET" not in r.text
     assert SENTINEL_Q not in r.text
     assert SENTINEL_SELECT not in r.text
-    assert "Traceback" not in r.text
+    text = " ".join(rec.message for rec in caplog.records)
+    assert "ask/docs failed: RuntimeError" in text
+    assert "SECRET" not in text
 
 
-def test_ask_rate_limit_counts_as_three(monkeypatch):
-    monkeypatch.setenv("ASK_RATE_LIMIT", "5")
-    monkeypatch.setenv("ASK_RATE_LIMIT_WINDOW", "60")
+@pytest.fixture
+def ask_rate_client(monkeypatch):
+    """Tight ask rate limit + cleaned settings/limiters even if the test fails."""
     monkeypatch.setenv("GROQ_API_KEY", "")
     monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
+    monkeypatch.setenv("SITE_AI_WIDGET_FAKE_EMBEDDER", "1")
     clear_settings_cache()
     reset_limiters()
     set_embedder(FakeEmbedder())
-
     app = create_app()
     user = {
         "id": uuid4(),
@@ -355,61 +381,64 @@ def test_ask_rate_limit_counts_as_three(monkeypatch):
     from site_ai_widget.api import auth as auth_mod
 
     app.dependency_overrides[auth_mod.current_user] = lambda: user
+    try:
+        with TestClient(app) as client:
+            yield client, app, monkeypatch
+    finally:
+        app.dependency_overrides.clear()
+        reset_limiters()
+        clear_settings_cache()
+        set_embedder(None)
+
+
+def test_ask_rate_limit_counts_as_three(ask_rate_client):
+    client, _app, monkeypatch = ask_rate_client
+    monkeypatch.setenv("ASK_RATE_LIMIT", "5")
+    clear_settings_cache()
+    reset_limiters()
     monkeypatch.setattr(
         "site_ai_widget.api.routes.ask.answer_with_sql",
         lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
     )
     monkeypatch.setattr("site_ai_widget.api.routes.ask.ask_documents", _docs_hit)
+
+    # 3 + 3 = 6 > 5 → second /ask is refused
+    assert client.post("/ask", json={"question": "q1"}).status_code == 200
+    blocked = client.post("/ask", json={"question": "q2"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "rate_limited"
+
+
+def test_ask_docs_still_counts_as_one(ask_rate_client):
+    client, _app, monkeypatch = ask_rate_client
+    monkeypatch.setenv("ASK_RATE_LIMIT", "3")
+    clear_settings_cache()
+    reset_limiters()
     monkeypatch.setattr(
         "site_ai_widget.docs.ask.hybrid_search",
         lambda *a, **k: [],
     )
 
-    with TestClient(app) as client:
-        # 3 + 3 = 6 > 5 → second /ask is refused
-        assert client.post("/ask", json={"question": "q1"}).status_code == 200
-        blocked = client.post("/ask", json={"question": "q2"})
-        assert blocked.status_code == 429
-        assert blocked.json()["detail"]["code"] == "rate_limited"
-
-    app.dependency_overrides.clear()
-    reset_limiters()
-    clear_settings_cache()
-    set_embedder(None)
+    assert client.post("/ask/docs", json={"question": "q1"}).status_code == 200
+    assert client.post("/ask/docs", json={"question": "q2"}).status_code == 200
+    assert client.post("/ask/docs", json={"question": "q3"}).status_code == 200
+    blocked = client.post("/ask/docs", json={"question": "q4"})
+    assert blocked.status_code == 429
 
 
-def test_ask_docs_still_counts_as_one(monkeypatch):
-    monkeypatch.setenv("ASK_RATE_LIMIT", "2")
-    monkeypatch.setenv("ASK_RATE_LIMIT_WINDOW", "60")
-    monkeypatch.setenv("GROQ_API_KEY", "")
-    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
+def test_ask_succeeds_when_limit_equals_weight(ask_rate_client):
+    """With ASK_RATE_LIMIT=3, /ask (weight 3) still succeeds once."""
+    client, _app, monkeypatch = ask_rate_client
+    monkeypatch.setenv("ASK_RATE_LIMIT", "3")
     clear_settings_cache()
     reset_limiters()
-    set_embedder(FakeEmbedder())
-
-    app = create_app()
-    user = {
-        "id": uuid4(),
-        "company_id": uuid4(),
-        "email": "r@example.com",
-        "role": "member",
-        "token_version": 0,
-    }
-    from site_ai_widget.api import auth as auth_mod
-
-    app.dependency_overrides[auth_mod.current_user] = lambda: user
     monkeypatch.setattr(
-        "site_ai_widget.docs.ask.hybrid_search",
-        lambda *a, **k: [],
+        "site_ai_widget.api.routes.ask.answer_with_sql",
+        lambda *a, **k: SqlAnswer(
+            status="ok", columns=["n"], rows=[["x"]], row_count=1, attempts=1
+        ),
     )
 
-    with TestClient(app) as client:
-        assert client.post("/ask/docs", json={"question": "q1"}).status_code == 200
-        assert client.post("/ask/docs", json={"question": "q2"}).status_code == 200
-        blocked = client.post("/ask/docs", json={"question": "q3"})
-        assert blocked.status_code == 429
-
-    app.dependency_overrides.clear()
-    reset_limiters()
-    clear_settings_cache()
-    set_embedder(None)
+    assert client.post("/ask", json={"question": "q1"}).status_code == 200
+    blocked = client.post("/ask", json={"question": "q2"})
+    assert blocked.status_code == 429

@@ -86,8 +86,12 @@ def ask(
     except ApiError as exc:
         log.warning("ask/docs failed: %s", exc.code)
         return AskResponse(mode="none", message=_NONE_MESSAGE)
+    except Exception as exc:
+        log.warning("ask/docs failed: %s", type(exc).__name__)
+        return AskResponse(mode="none", message=_NONE_MESSAGE)
 
-    if not docs.get("citations"):
+    # Decide from search hits (matched), not from whether the answer cited [n].
+    if not docs.get("matched"):
         return AskResponse(mode="none", message=_NONE_MESSAGE)
 
     return AskResponse(
