@@ -15,6 +15,9 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal
 
+from site_ai_widget.docs.spacing import normalize_answer_spaces
+from site_ai_widget.sqlqa.catalog import MONEY_COLUMN_NAMES
+
 log = logging.getLogger("site_ai_widget")
 
 Lang = Literal["pt", "en"]
@@ -62,7 +65,7 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _LINK = re.compile(r"(?i)\b(?:https?://|www\.)\S+|\b[\w.+-]+@[\w-]+\.[\w.]+")
 # Unambiguous money column names only: "total" and "amount" are often counts
 # (SELECT count(*) AS total) and must never get a currency symbol.
-_MONEY_COLUMNS = frozenset({"price", "preco", "unit_price", "valor", "cost", "custo"})
+_MONEY_COLUMNS = frozenset(MONEY_COLUMN_NAMES)
 # Currency words and codes. The reply may only use the configured symbol.
 _CURRENCY_WORD = re.compile(
     r"(?i)(?<![\w])(eur|euros?|usd|us\$|d[oó]lar(?:es)?|dollars?|gbp|pounds?|libras?|brl|reais)(?![\w])"
@@ -588,7 +591,10 @@ def present_sql_answer(
         )
         return fallback
 
-    text = (raw or "").strip()
+    # Models follow Portuguese typography: "8,49\u202f\u20ac", "750\u202fml". Those are the
+    # same values with a narrow no-break space; normalize before checking, or
+    # every natural reply fails and the visitor only ever sees the fallback list.
+    text = normalize_answer_spaces((raw or "").strip())
     more = _more_line(rows, locale, truncated, products=products)
     shown = fallback if more is None else fallback.rsplit("\n", 1)[0]
     reason = _llm_answer_fail(

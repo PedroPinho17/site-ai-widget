@@ -6,10 +6,10 @@ import logging
 import pytest
 
 from site_ai_widget.sqlqa import pipeline
+from site_ai_widget.sqlqa.catalog import is_catalog_question
 from site_ai_widget.sqlqa.generator import RETRY_HINTS, retry_hint
 from site_ai_widget.sqlqa.pipeline import (
     SqlAnswer,
-    _is_catalog_question,
     _relax_text_match,
     _stem_for_search,
     _stem_ilike_match,
@@ -694,15 +694,15 @@ def test_catalog_plural_empty_result_is_restemmed(monkeypatch):
     assert out.row_count == 2
     assert all("Queijo" in row[0] for row in out.rows)
     assert any("%queijo%" in q.lower() for q in ran)
-    assert _is_catalog_question("Que queijos têm?")
-    assert _is_catalog_question("What cheeses do you have?")
+    assert is_catalog_question("Que queijos têm?")
+    assert is_catalog_question("What cheeses do you have?")
 
 
 def test_catalog_question_triggers_no_rows_retry_flag():
-    assert _is_catalog_question("Que queijos têm?")
-    assert _is_catalog_question("quais produtos têm?")
-    assert _is_catalog_question("What cheeses do you have?")
-    assert not _is_catalog_question("Qual o horário de abertura?")
+    assert is_catalog_question("Que queijos têm?")
+    assert is_catalog_question("quais produtos têm?")
+    assert is_catalog_question("What cheeses do you have?")
+    assert not is_catalog_question("Qual o horário de abertura?")
 
 
 def test_strip_unaccent_leaves_lower_ilike():
@@ -813,9 +813,7 @@ def test_plain_plural_word_is_still_stemmed():
     ],
 )
 def test_catalog_question_is_detected_by_shape_not_product_words(question, expected):
-    from site_ai_widget.sqlqa.pipeline import _is_catalog_question
-
-    assert _is_catalog_question(question) is expected
+    assert is_catalog_question(question) is expected
 
 
 def test_catalog_question_with_an_empty_stock_filter_is_not_retried(monkeypatch):

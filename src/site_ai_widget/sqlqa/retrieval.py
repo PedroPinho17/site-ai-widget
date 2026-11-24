@@ -9,6 +9,11 @@ import psycopg
 
 from site_ai_widget.db.pool import connection
 from site_ai_widget.docs.embed import get_embedder
+from site_ai_widget.sqlqa.catalog import (
+    CATALOG_PIN_COLUMNS,
+    CATALOG_PIN_LIMIT,
+    is_catalog_question,
+)
 from site_ai_widget.sqlqa.validator import AllowedSchema
 
 log = logging.getLogger("site_ai_widget")
@@ -147,13 +152,21 @@ def retrieve_schema(
     k = _clamp_top_k(top_k)
     # Embed first: the model never runs while a pooled connection is held.
     emb = _vector_literal(get_embedder().embed_query(question))
+    pin = is_catalog_question(question)
     if conn is not None:
-        return _retrieve(conn, company_id, emb, k)
+        return _retrieve(conn, company_id, emb, k, pin_catalog=pin)
     with connection() as owned:
-        return _retrieve(owned, company_id, emb, k)
+        return _retrieve(owned, company_id, emb, k, pin_catalog=pin)
 
 
-def _retrieve(conn: psycopg.Connection, company_id: str, emb: str, top_k: int) -> SchemaSlice:
+def _retrieve(
+    conn: psycopg.Connection,
+    company_id: str,
+    emb: str,
+    top_k: int,
+    *,
+    pin_catalog: bool = False,
+) -> SchemaSlice:
     # Explicit transaction: SET LOCAL needs one, also on a caller's autocommit
     # connection (inside an open transaction this is a savepoint).
     with conn.transaction():
@@ -166,7 +179,10 @@ def _retrieve(conn: psycopg.Connection, company_id: str, emb: str, top_k: int) -
         # If the planner picks the HNSW index, keep scanning past rows of other
         # companies instead of returning too few tables (same as docs/retrieve.py).
         conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
-        table_rows = conn.execute(
+        # Nearest approved tables by embedding, then force-include catalog pins
+        # (approved tables with a price-like column) when the question is a product
+        # listing: they often rank below stores/stock/hours and fall out of top_k.
+        nearest = conn.execute(
             """
             SELECT id, schema_name, table_name, kind, description
             FROM schema_tables
@@ -179,6 +195,49 @@ def _retrieve(conn: psycopg.Connection, company_id: str, emb: str, top_k: int) -
             """,
             (company_id, emb, top_k),
         ).fetchall()
+
+        pinned: list = []
+        if pin_catalog:
+            pinned = conn.execute(
+                """
+                SELECT t.id, t.schema_name, t.table_name, t.kind, t.description
+                FROM schema_tables AS t
+                WHERE t.company_id = %s
+                  AND t.status = 'approved'
+                  AND t.is_present
+                  AND t.embedding IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1 FROM schema_columns AS c
+                      WHERE c.table_id = t.id
+                        AND c.company_id = t.company_id
+                        AND c.status = 'approved'
+                        AND c.is_present
+                        AND NOT c.is_sensitive
+                        AND lower(c.column_name) = ANY(%s)
+                  )
+                ORDER BY t.table_name
+                LIMIT %s
+                """,
+                (company_id, list(CATALOG_PIN_COLUMNS), CATALOG_PIN_LIMIT),
+            ).fetchall()
+
+        seen_ids: set = set()
+        table_rows: list = []
+        for row in pinned:
+            if row[0] in seen_ids:
+                continue
+            seen_ids.add(row[0])
+            table_rows.append(row)
+        # Fill remaining slots from nearest; never drop pins even if that
+        # exceeds top_k (better a larger schema than cheeses from a PDF).
+        limit = max(top_k, len(table_rows))
+        for row in nearest:
+            if len(table_rows) >= limit:
+                break
+            if row[0] in seen_ids:
+                continue
+            seen_ids.add(row[0])
+            table_rows.append(row)
 
         if not table_rows:
             _restore_iterative_scan(conn, previous)

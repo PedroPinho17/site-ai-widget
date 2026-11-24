@@ -25,6 +25,19 @@ def test_restore_spacing_for_atlas_manual_address():
     assert "Amendoeiras48" not in restore_source_spacing(glued, chunks)
 
 
+def test_narrow_nbsp_between_street_and_number_becomes_a_normal_space():
+    """PDF/LLM answers often use U+202F (NNBSP) instead of a real space."""
+    chunks = [{"content": ATLAS_ADDRESS_LINE}]
+    nnbsp = "A morada é Rua das Amendoeiras\u202f48, 1170-000 Lisboa."
+    nbsp = "A morada é Rua das Amendoeiras\u00a048, 1170-000 Lisboa."
+    for glued in (nnbsp, nbsp):
+        out = restore_source_spacing(glued, chunks)
+        assert "Amendoeiras 48" in out
+        assert "\u202f" not in out
+        assert "\u00a0" not in out
+        assert "Amendoeiras48" not in out
+
+
 def test_ask_documents_repairs_glued_atlas_address(monkeypatch):
     chunk = {
         "n": 1,
@@ -49,6 +62,31 @@ def test_ask_documents_repairs_glued_atlas_address(monkeypatch):
     assert out["matched"] is True
     assert "Amendoeiras 48" in out["answer"]
     assert "Amendoeiras48" not in out["answer"]
+
+
+def test_ask_documents_repairs_nnbsp_atlas_address(monkeypatch):
+    chunk = {
+        "n": 1,
+        "id": uuid4(),
+        "document_id": uuid4(),
+        "document_name": "Mercearia Atlas - Manual do Cliente.pdf",
+        "page": 1,
+        "chunk_index": 0,
+        "content": ATLAS_ADDRESS_LINE,
+    }
+    monkeypatch.setattr(
+        "site_ai_widget.docs.ask.hybrid_search",
+        lambda *a, **k: [chunk],
+    )
+    out = ask_documents(
+        company_id=uuid4(),
+        question="Como posso contactar-vos?",
+        llm_complete=lambda messages, temperature=0: (
+            "Pode contactar-nos em Rua das Amendoeiras\u202f48, 1170-000 Lisboa. [1]"
+        ),
+    )
+    assert "Amendoeiras 48" in out["answer"]
+    assert "\u202f" not in out["answer"]
 
 
 

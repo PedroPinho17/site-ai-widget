@@ -70,7 +70,15 @@ class _FakeConn:
         if "current_setting('hnsw.iterative_scan', true)" in sql:
             return _Result([(self.hnsw_iterative_scan,)])
         if "FROM schema_tables" in sql:
-            return _Result(self.table_rows)
+            rows = list(self.table_rows)
+            # Catalog pin query: tables with an approved price-like column.
+            if "FROM schema_columns" in sql and params is not None:
+                money = {str(n).lower() for n in (params[1] or [])}
+                ids = {r[0] for r in self.column_rows if str(r[1]).lower() in money}
+                rows = sorted((r for r in rows if r[0] in ids), key=lambda r: r[2])[: params[2]]
+            elif params is not None and isinstance(params[-1], int):
+                rows = rows[: params[-1]]
+            return _Result(rows)
         if "FROM schema_columns" in sql:
             return _Result(self.column_rows)
         return _Result([])
@@ -113,6 +121,38 @@ def test_slice_and_prompt_from_returned_rows():
         "  - name text: Display name\n"
         "  - price numeric: Shelf price"
     )
+
+
+def test_catalog_question_pins_products_even_when_nearest_omit_it():
+    """Embedding top-k alone can rank stores/stock/hours above products."""
+    cats = uuid.UUID("33333333-3333-3333-3333-333333333333")
+    stores = uuid.UUID("44444444-4444-4444-4444-444444444444")
+    hours = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    stock = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    # Nearest order (FakeConn list order): products last → dropped from top_k=4.
+    conn = _FakeConn(
+        table_rows=[
+            (cats, "public", "categories", "table", "Categories"),
+            (stores, "public", "stores", "table", "Stores"),
+            (stock, "public", "stock", "table", "Stock"),
+            (hours, "public", "opening_hours", "table", "Hours"),
+            (PRODUCTS_ID, "public", "products", "table", "Products"),
+        ],
+        column_rows=[
+            (cats, "name", "text", None),
+            (stores, "name", "text", None),
+            (stock, "quantity", "integer", None),
+            (hours, "opens", "time", None),
+            (PRODUCTS_ID, "name", "text", None),
+            (PRODUCTS_ID, "price", "numeric", None),
+        ],
+    )
+    slice_ = retrieve_schema(COMPANY_A, "Que queijos têm?", top_k=4, conn=conn)
+    names = [t.table_name for t in slice_.tables]
+    assert "products" in names
+    assert names[0] == "products"
+    # Pin query + nearest query both hit schema_tables.
+    assert sum(1 for sql, _ in conn.calls if "FROM schema_tables" in sql) == 2
 
 
 def test_table_with_no_approved_columns_is_dropped():
@@ -536,3 +576,37 @@ def test_original_query_error_is_raised_on_a_real_connection(settings_env, autoc
         with pytest.raises(psycopg.errors.InvalidTextRepresentation):
             retrieval._retrieve(conn, str(uuid.uuid4()), "[not-a-vector]", 4)
         conn.rollback()
+
+
+def test_catalog_pin_finds_the_item_table_by_its_price_column_not_its_name():
+    """A client whose table is "produtos" (or "artigos") must be pinned too."""
+    produtos = uuid.UUID("77777777-7777-7777-7777-777777777777")
+    lojas = uuid.UUID("88888888-8888-8888-8888-888888888888")
+    horarios = uuid.UUID("99999999-9999-9999-9999-999999999999")
+    stock = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000000")
+    clientes = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000000")
+    conn = _FakeConn(
+        table_rows=[
+            (lojas, "public", "lojas", "table", "Lojas"),
+            (horarios, "public", "horarios", "table", "Horários"),
+            (stock, "public", "stock", "table", "Stock"),
+            (clientes, "public", "clientes", "table", "Clientes"),
+            (produtos, "public", "produtos", "table", "Produtos"),
+        ],
+        column_rows=[
+            (lojas, "nome", "text", None),
+            (horarios, "abre", "time", None),
+            (stock, "quantidade", "integer", None),
+            (clientes, "nome", "text", None),
+            (produtos, "nome", "text", None),
+            (produtos, "preco", "numeric", None),
+        ],
+    )
+    names = [t.table_name for t in retrieve_schema(COMPANY_A, "Que queijos têm?", top_k=4, conn=conn).tables]
+    assert names[0] == "produtos"
+    # Not a catalog question: no pin, plain nearest top_k (produtos falls out).
+    conn2 = _FakeConn(table_rows=conn.table_rows, column_rows=conn.column_rows)
+    plain = [t.table_name for t in retrieve_schema(COMPANY_A, "Onde fica a loja?", top_k=4, conn=conn2).tables]
+    assert "produtos" not in plain
+    pin_sql = [sql for sql, _ in conn.calls if "FROM schema_columns" in sql and "EXISTS" in sql]
+    assert pin_sql and "company_id" in pin_sql[0] and "NOT c.is_sensitive" in pin_sql[0]

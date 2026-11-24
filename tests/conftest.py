@@ -128,3 +128,23 @@ def demo_key_restored():
                 (before[0], before[1], before[2], DEMO_WIDGET_KEY),
             )
     close_pool()
+
+
+@pytest.fixture(autouse=True)
+def _no_live_llm(request, monkeypatch):
+    """Unit tests never call the real LLM provider (network, cost, nondeterminism).
+
+    ``.env`` may hold real keys for the running app; every test starts with none.
+    A test that needs a key sets one itself. Live checks live in tests/integration
+    and opt in with LIVE_DEMO=1.
+    """
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    from site_ai_widget.api.config import clear_settings_cache
+
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
+    clear_settings_cache()
+    yield
+    clear_settings_cache()

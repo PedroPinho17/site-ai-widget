@@ -6,7 +6,6 @@ and attempt counts are fine. SqlAnswer never carries SQL or DB error text.
 from __future__ import annotations
 
 import logging
-import re
 import time
 import unicodedata
 from collections.abc import Callable
@@ -17,6 +16,7 @@ import sqlglot
 from sqlglot import exp
 
 from site_ai_widget.llm.client import complete_chat
+from site_ai_widget.sqlqa.catalog import is_catalog_question
 from site_ai_widget.sqlqa.generator import generate_sql, retry_hint
 from site_ai_widget.sqlqa.retrieval import retrieve_schema
 from site_ai_widget.sqlqa.runner import RunnerError, run_sql
@@ -116,7 +116,7 @@ def answer_with_sql(
         if result.row_count == 0 and attempt < 2 and (
             _has_text_equality(validated)
             or (
-                (_has_join(validated) or _is_catalog_question(question))
+                (_has_join(validated) or is_catalog_question(question))
                 and not _has_numeric_filter(validated)
             )
         ):
@@ -213,20 +213,6 @@ def _fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text)
     plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return " ".join(plain.casefold().split())
-
-
-# Question shape only, never product words: the same code serves every company.
-# "Que queijos têm?", "Quais vinhos vendem?", "Têm queijos?", "What cheeses do you
-# have?", "Do you sell bread?".
-_CATALOG_QUESTION = re.compile(
-    r"(?i)(?:\b(?:que|quais|what|which)\b.{0,48}\b(?:t[eê]m|vendem|have|sell)\b|"
-    r"^\s*(?:t[eê]m|vendem|do\s+you\s+(?:have|sell)|have\s+you\s+got)\b)",
-)
-
-
-def _is_catalog_question(question: str) -> bool:
-    """Visitor is asking which products exist (list from ``products``, not docs)."""
-    return bool(_CATALOG_QUESTION.search(question or ""))
 
 
 def _typed_by_visitor(text: str, question: str) -> bool:
