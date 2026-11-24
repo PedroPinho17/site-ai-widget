@@ -13,9 +13,12 @@ from site_ai_widget.evalkit.compare import rows_match
 from site_ai_widget.evalkit.report import markdown_report, summarize
 from site_ai_widget.evalkit.score import score_doc, score_refusal, score_sql
 from site_ai_widget.evaluate import (
+    CLIENT_DB_UNREACHABLE,
     DEFAULT_QUESTIONS,
+    ClientDbUnreachable,
     ask_with_retries,
     filter_items,
+    is_client_db_unreachable,
     load_questions,
     run_eval,
 )
@@ -321,6 +324,90 @@ def test_refusal_run_marks_sql_execution(tmp_path):
     )
     assert payload["records"][0]["correct"] is False
     assert payload["records"][0]["reason"] == "sql_executed"
+
+
+def test_unreachable_client_db_aborts_without_score_files(tmp_path):
+    questions = {
+        "company_slug": "mercearia-atlas",
+        "items": [
+            {"id": "sql-01", "type": "sql", "lang": "pt", "question": "preço?", "reference": {"rows": [[8.49]]}},
+            {"id": "sql-02", "type": "sql", "lang": "pt", "question": "stock?", "reference": {"rows": [[24]]}},
+        ],
+    }
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(questions), encoding="utf-8")
+    history = tmp_path / "history.csv"
+    full = tmp_path / "evaluation.md"
+    results = tmp_path / "results"
+    calls = {"n": 0}
+
+    def ask_fn(company_id, item, tracker):
+        calls["n"] += 1
+        tracker["sql_reason"] = "db_error"
+        tracker["sql_error_class"] = "OperationalError"
+        tracker["last_error"] = RunnerError("db_error", error_class="OperationalError")
+        return SimpleNamespace(mode="none", answer="Não consegui responder a isso.")
+
+    with pytest.raises(ClientDbUnreachable) as exc:
+        run_eval(
+            questions_path=qpath,
+            ask_fn=ask_fn,
+            company_id="cid",
+            sleep=lambda _s: None,
+            results_dir=results,
+            history_path=history,
+            checkpoint_file=tmp_path / ".checkpoint.json",
+            partial_md=tmp_path / "evaluation.partial.md",
+            full_md=full,
+        )
+    assert CLIENT_DB_UNREACHABLE in str(exc.value)
+    assert calls["n"] == 1
+    assert not history.exists()
+    assert not full.exists()
+    assert not results.exists() or not any(results.iterdir())
+
+
+def test_sql_logic_db_error_does_not_abort(tmp_path):
+    questions = {
+        "company_slug": "mercearia-atlas",
+        "items": [
+            {"id": "sql-01", "type": "sql", "lang": "pt", "question": "preço?", "reference": {"rows": [[8.49]]}},
+        ],
+    }
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(questions), encoding="utf-8")
+
+    def ask_fn(company_id, item, tracker):
+        tracker["sql_reason"] = "db_error"
+        tracker["sql_error_class"] = "ProgrammingError"
+        tracker["last_error"] = RunnerError("db_error", error_class="ProgrammingError")
+        return SimpleNamespace(mode="none", answer="x")
+
+    payload = run_eval(
+        questions_path=qpath,
+        ask_fn=ask_fn,
+        company_id="cid",
+        sleep=lambda _s: None,
+        results_dir=tmp_path / "results",
+        history_path=tmp_path / "history.csv",
+        checkpoint_file=tmp_path / ".checkpoint.json",
+        partial_md=tmp_path / "p.md",
+        full_md=tmp_path / "f.md",
+    )
+    assert payload["records"][0]["correct"] is False
+    assert (tmp_path / "history.csv").is_file()
+
+
+def test_is_client_db_unreachable_helpers():
+    sql = {"type": "sql"}
+    assert is_client_db_unreachable(sql, {"sql_reason": "db_error"}, None)
+    assert is_client_db_unreachable(sql, {"api_code": "db_host_unresolvable"}, None)
+    assert not is_client_db_unreachable(
+        sql,
+        {"sql_reason": "db_error", "sql_error_class": "ProgrammingError"},
+        None,
+    )
+    assert not is_client_db_unreachable({"type": "doc"}, {"sql_reason": "db_error"}, None)
 
 
 def test_times_and_numeric_tolerance_edges():

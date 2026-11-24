@@ -389,20 +389,28 @@ def test_load_connection_sqlstate_08_is_connection(monkeypatch):
     assert "SECRET-HOST" not in str(exc.value)
 
 
-def test_api_error_from_session_maps_to_db_error(monkeypatch):
+def test_api_error_from_session_maps_to_db_error(monkeypatch, caplog):
     monkeypatch.setattr(runner, "load_connection_params", lambda cid: PARAMS)
 
     @contextlib.contextmanager
     def busy(*a, **k):
-        raise ApiError("db_busy", 503)
+        raise ApiError("db_host_unresolvable", 422)
         yield  # pragma: no cover
 
     monkeypatch.setattr(runner, "client_session", busy)
-    with pytest.raises(RunnerError) as exc:
+    with caplog.at_level(logging.WARNING, logger="site_ai_widget"), pytest.raises(RunnerError) as exc:
         run_sql(_ok_sql(), company_id=COMPANY, allowed=ALLOWED)
     assert exc.value.reason == "db_error"
+    assert exc.value.api_code == "db_host_unresolvable"
+    assert exc.value.error_class == "ApiError"
     assert exc.value.__cause__ is None
     assert exc.value.__context__ is None
+    text = " ".join(r.message for r in caplog.records)
+    assert "api_code=db_host_unresolvable" in text
+    assert "error_class=ApiError" in text
+    assert "SECRET" not in text
+    assert "clientdb" not in text
+    assert "5436" not in text
 
 
 # ---------- clamping ----------
@@ -666,6 +674,8 @@ def test_logging_success_timeout_db_error_no_secrets(monkeypatch, caplog):
         _run(monkeypatch, conn3)
     text = " ".join(r.message for r in caplog.records)
     assert "reason=db_error" in text
+    assert "error_class=ProgrammingError" in text
+    assert "sqlstate_class=-" in text
     for s in sentinels:
         assert s not in text
 

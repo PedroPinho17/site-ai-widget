@@ -144,7 +144,13 @@ O script é `GET /embed.js`. A origem tem de coincidir exatamente com a lista da
 
 ## Avaliação
 
-O conjunto está em `eval/questions.json` (40 itens fictícios da Atlas). Execução: `uv run python -m site_ai_widget.evaluate`.
+O conjunto está em `eval/questions.json` (40 itens fictícios da Atlas). Corra **dentro do contentor da app** para o anfitrião `clientdb` do DSN guardado resolver (em Windows o porto `127.0.0.1:5436` é outro endereço):
+
+```bash
+docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
+```
+
+Se a base de dados do cliente estiver inacessível, a avaliação pára com `client DB unreachable` e não escreve `docs/evaluation.md` nem `eval/history.csv`.
 
 **Resultados: ainda não corridos** (`docs/evaluation.md` não está no repositório).
 

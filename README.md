@@ -144,7 +144,13 @@ The script is `GET /embed.js`. Origin must match the key’s allowlist exactly.
 
 ## Evaluation
 
-The evaluation set is `eval/questions.json` (40 fictional Atlas items). Runner: `uv run python -m site_ai_widget.evaluate`.
+The evaluation set is `eval/questions.json` (40 fictional Atlas items). Run it **inside the app container** so the stored client DSN host `clientdb` resolves (the Windows/host name `127.0.0.1:5436` is a different address):
+
+```bash
+docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
+```
+
+If the client DB is unreachable, the runner stops with `client DB unreachable` and does not write `docs/evaluation.md` or `eval/history.csv`.
 
 **Results: not run yet** (`docs/evaluation.md` is not in the repository).
 

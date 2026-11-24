@@ -93,11 +93,25 @@ class RunnerError(Exception):
 
     ``reason`` is a stable code for logs and API mapping. ``detail`` is a short
     safe hint — never SQL, the question, parameters or database error text.
+    ``error_class`` / ``sqlstate_class`` / ``api_code`` are diagnostics only
+    (exception type name, SQLSTATE class, stable ApiError code). Never the
+    driver message, host, or DSN.
     """
 
-    def __init__(self, reason: str, detail: str = "") -> None:
+    def __init__(
+        self,
+        reason: str,
+        detail: str = "",
+        *,
+        error_class: str | None = None,
+        sqlstate_class: str | None = None,
+        api_code: str | None = None,
+    ) -> None:
         self.reason = reason
         self.detail = detail or _SAFE_DETAILS.get(reason, "")
+        self.error_class = error_class
+        self.sqlstate_class = sqlstate_class
+        self.api_code = api_code
         super().__init__(reason)
 
 
@@ -143,16 +157,26 @@ def run_sql(
     deadline_at = started + deadline
     reason: str | None = None
     result: RunResult | None = None
+    error_class: str | None = None
+    state_class: str | None = None
+    api_code: str | None = None
 
     params = None
     try:
         params = load_connection_params(company_id)
     except psycopg.Error as exc:
         reason = _reason_from_pg(exc)
-    except (ApiError, PoolTimeout, KeyError, ValueError):
+        error_class = type(exc).__name__
+        state_class = sqlstate_class(exc)
+    except ApiError as exc:
+        reason = "db_error"
+        error_class = type(exc).__name__
+        api_code = exc.code
+    except (PoolTimeout, KeyError, ValueError) as exc:
         # App DB down, pool exhausted, bad company_id or unreadable DSN: the
         # original text may hold DB details, so only the reason is kept.
         reason = "db_error"
+        error_class = type(exc).__name__
     if reason is None and params is None:
         reason = "db_error"
 
@@ -170,26 +194,43 @@ def run_sql(
                         deadline_at=deadline_at,
                         started=started,
                     )
-                except (QueryCanceled, LockNotAvailable):
+                except (QueryCanceled, LockNotAvailable) as exc:
                     reason = "timeout"
+                    error_class = type(exc).__name__
                 except RunnerError as exc:
                     reason = exc.reason
+                    error_class = exc.error_class or type(exc).__name__
+                    state_class = exc.sqlstate_class
+                    api_code = exc.api_code
                 except psycopg.Error as exc:
                     reason = _reason_from_pg(exc)
+                    error_class = type(exc).__name__
+                    state_class = sqlstate_class(exc)
                 finally:
                     with contextlib.suppress(psycopg.Error):
                         conn.rollback()
-        except ApiError:
+        except ApiError as exc:
             reason = "db_error"
+            error_class = type(exc).__name__
+            api_code = exc.code
 
     if reason is not None:
         log.warning(
-            "sqlqa/runner company=%s reason=%s row_count=0 elapsed_ms=%s",
+            "sqlqa/runner company=%s reason=%s sqlstate_class=%s error_class=%s api_code=%s "
+            "row_count=0 elapsed_ms=%s",
             company_id,
             reason,
+            state_class or "-",
+            error_class or "-",
+            api_code or "-",
             _elapsed_ms(started),
         )
-        raise RunnerError(reason)
+        raise RunnerError(
+            reason,
+            error_class=error_class,
+            sqlstate_class=state_class,
+            api_code=api_code,
+        )
 
     assert result is not None
     log.info(

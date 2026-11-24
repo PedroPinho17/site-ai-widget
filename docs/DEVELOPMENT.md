@@ -80,13 +80,19 @@ Requires `DEMO_PASSWORD_ATLAS` and `DEMO_PASSWORD_LIMA`. With Compose, `RUN_SEED
 
 Do not run this in CI against Groq unless you intend to consume quota.
 
+The saved client DSN uses the Compose hostname `clientdb` (port 5432 **inside** the network). That name does not resolve on the Windows host; the published port is `127.0.0.1:5436`. Eval therefore runs in the **app** container (same network as the API), not `uv run` on the host:
+
 ```bash
-uv run python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
+docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 ```
 
-Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes `eval/results/<timestamp>.json` and appends `eval/history.csv`. `docs/evaluation.md` is written only after a **full** run. Those outputs are gitignored except `eval/questions.json`.
+Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes `eval/results/<timestamp>.json` and appends `eval/history.csv`. `docs/evaluation.md` is written only after a **full** run. If every SQL attempt hits `db_error` / connection failure, the process exits with `client DB unreachable` and does **not** write those score files. Outputs are gitignored except `eval/questions.json`.
 
 ## Troubleshooting
+
+### Eval `client DB unreachable` / SQL `reason=db_error` in ~3s
+
+The host cannot open `clientdb:5432`. Use `docker compose exec app …` as above. Logs may show `error_class=ApiError api_code=db_host_unresolvable` or `error_class=OperationalError sqlstate_class=08` — never the DSN.
 
 ### Groq quota / HTTP 429
 

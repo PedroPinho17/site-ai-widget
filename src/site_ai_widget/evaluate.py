@@ -1,8 +1,9 @@
 """Offline evaluation runner: SQL denotation, document grounding, refusals.
 
-Usage (from the repo root, with the demo company and Groq keys already configured):
+Run inside the Compose **app** container so the stored client DSN hostname
+``clientdb`` resolves (host port 5436 is not that name):
 
-    python -m site_ai_widget.evaluate
+    docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 
 This module does not print secrets. It is safe to import in unit tests with a
 fake ``ask_fn``. Do not run it against a live LLM from automated tests.
@@ -30,7 +31,7 @@ from site_ai_widget.evalkit.checkpoint import (
 from site_ai_widget.evalkit.report import append_history, markdown_report, summarize, utc_stamp, write_results_json
 from site_ai_widget.evalkit.score import is_busy_answer, score_item
 from site_ai_widget.llm.client import MIN_COOLDOWN, retry_after
-from site_ai_widget.sqlqa.runner import is_connection_failure
+from site_ai_widget.sqlqa.runner import is_connection_failure, sqlstate_class
 
 log = logging.getLogger("site_ai_widget.eval")
 
@@ -44,8 +45,26 @@ FULL_MD = REPO_ROOT / "docs" / "evaluation.md"
 
 MAX_QUOTA_RETRIES = 8
 MAX_CONNECTION_RETRIES = 3
+UNREACHABLE_API_CODES = frozenset(
+    {
+        "db_host_unresolvable",
+        "db_unreachable",
+        "db_connection_failed",
+        "db_timeout",
+        "db_host_not_allowed",
+    }
+)
+SQL_LOGIC_ERROR_CLASSES = frozenset({"ProgrammingError", "DataError", "IntegrityError", "NotSupportedError"})
+CLIENT_DB_UNREACHABLE = "client DB unreachable"
 
 AskFn = Callable[..., Any]
+
+
+class ClientDbUnreachable(SystemExit):
+    """Eval aborted: the client database could not be reached."""
+
+    def __init__(self) -> None:
+        super().__init__(CLIENT_DB_UNREACHABLE)
 
 
 def load_questions(path: Path) -> dict[str, Any]:
@@ -114,6 +133,9 @@ def _default_ask(company_id: str, item: dict[str, Any], tracker: dict[str, Any])
             return original_run(*args, **kwargs)
         except Exception as exc:
             tracker["last_error"] = exc
+            tracker["sql_error_class"] = getattr(exc, "error_class", None) or type(exc).__name__
+            tracker["sqlstate_class"] = getattr(exc, "sqlstate_class", None) or sqlstate_class(exc)
+            tracker["api_code"] = getattr(exc, "api_code", None)
             raise
 
     def wrapped_sql(*args: Any, **kwargs: Any):
@@ -193,6 +215,31 @@ def ask_with_retries(
         return response, tracker, None
 
 
+def is_client_db_unreachable(
+    item: dict[str, Any],
+    tracker: dict[str, Any],
+    skipped: str | None,
+) -> bool:
+    """True when SQL never reached the client database (DNS, TCP, SQLSTATE 08)."""
+    if item.get("type") != "sql":
+        return False
+    if skipped == "connection":
+        return True
+    last = tracker.get("last_error")
+    api_code = tracker.get("api_code") or getattr(last, "api_code", None)
+    if api_code in UNREACHABLE_API_CODES:
+        return True
+    state = tracker.get("sqlstate_class") or getattr(last, "sqlstate_class", None)
+    if state == "08" or sqlstate_class(last) == "08":
+        return True
+    if tracker.get("sql_reason") == "connection" or getattr(last, "reason", None) == "connection":
+        return True
+    error_class = tracker.get("sql_error_class") or getattr(last, "error_class", None)
+    if error_class in SQL_LOGIC_ERROR_CLASSES:
+        return False
+    return bool(tracker.get("sql_reason") == "db_error" or getattr(last, "reason", None) == "db_error")
+
+
 def _record_payload(item: dict[str, Any], scored: dict[str, Any], *, skipped: str | None) -> dict[str, Any]:
     rec = {
         "id": item["id"],
@@ -269,6 +316,11 @@ def run_eval(
         rec = _record_payload(item, scored, skipped=skipped)
         records.append(rec)
         done.add(item["id"])
+        if is_client_db_unreachable(item, tracker, skipped):
+            log.error("%s", CLIENT_DB_UNREACHABLE)
+            partial_md.unlink(missing_ok=True)
+            clear_checkpoint(checkpoint_file)
+            raise ClientDbUnreachable()
         save_checkpoint(
             checkpoint_file,
             {"done": sorted(done), "records": records, "results_path": str(results_path)},
@@ -331,15 +383,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args(argv)
-    payload = run_eval(
-        questions_path=args.questions,
-        only=args.only,
-        limit=args.limit,
-        delay=args.delay,
-        batch_size=args.batch_size,
-        resume=args.resume,
-        company_slug=args.company_slug,
-    )
+    try:
+        payload = run_eval(
+            questions_path=args.questions,
+            only=args.only,
+            limit=args.limit,
+            delay=args.delay,
+            batch_size=args.batch_size,
+            resume=args.resume,
+            company_slug=args.company_slug,
+        )
+    except ClientDbUnreachable as exc:
+        log.error("%s", exc)
+        return 2
     summary = payload["summary"]
     log.info(
         "eval done total=%s correct=%s skipped=%s",
