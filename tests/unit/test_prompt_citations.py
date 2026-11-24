@@ -29,17 +29,23 @@ def test_system_asks_for_european_portuguese():
     assert "contactar" not in system
 
 
-def test_map_citations_falls_back_when_answer_omits_markers():
+def test_map_citations_chips_for_real_answers_none_for_no_information():
     chunks = [
         {"n": 1, "document_id": "aaa", "document_name": "politica.pdf", "page": 2, "content": "x"},
         {"n": 2, "document_id": "aaa", "document_name": "politica.pdf", "page": 3, "content": "y"},
         {"n": 3, "document_id": "bbb", "document_name": "faq.pdf", "page": 1, "content": "z"},
     ]
-    cites = map_citations("Pode devolver em 14 dias.", chunks)
-    assert cites == [
+    # Real answer that forgot [n]: one chip per retrieved document.
+    assert map_citations("Pode devolver em 14 dias.", chunks) == [
         {"document_id": "aaa", "document_name": "politica.pdf", "page": 2},
         {"document_id": "bbb", "document_name": "faq.pdf", "page": 1},
     ]
+    # "No information" replies get none, even with a stray marker.
+    assert map_citations("Não tenho essa informação nos documentos.", chunks) == []
+    assert map_citations("Não tenho essa informação [1].", chunks) == []
+    assert map_citations("I could not find that in the documents.", chunks) == []
+    cited = map_citations("Devoluções em 14 dias [1].", chunks)
+    assert cited == [{"document_id": "aaa", "document_name": "politica.pdf", "page": 2}]
 
 
 def test_excerpts_delimited_and_untrusted():

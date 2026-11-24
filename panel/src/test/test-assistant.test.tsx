@@ -95,6 +95,7 @@ describe("test assistant page", () => {
     });
     expect(screen.getByRole("button", { name: "Olá" })).toBeInTheDocument();
   });
+
 });
 
 describe("widget currency setting", () => {
@@ -278,5 +279,60 @@ describe("widget currency setting", () => {
 
     expect(bodies[0]).toEqual({ question: "Têm pão de milho?" });
     expect(bodies[1]).toEqual({ question: "ok", previous_lang: "en" });
+  });
+
+  it("does not show source chips on a não-sei answer", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/company")) {
+          return jsonResponse(200, { id: admin.company_id, name: "Mercearia Atlas", slug: "x", default_locale: "pt" });
+        }
+        if (url.endsWith("/assistant/test")) {
+          return jsonResponse(200, {
+            mode: "none",
+            answer: "Não tenho essa informação nos documentos.",
+            sources: [{ document_id: "d1", document_name: "Manual.pdf", page: 1 }],
+            elapsed_ms: 9,
+          });
+        }
+        return jsonResponse(404, { detail: { code: "not_found" } });
+      }),
+    );
+    setSession("test-jwt-token", admin);
+    renderPanel("/test");
+    await user.type(await screen.findByLabelText("Question"), "Têm vinho do Porto?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Não tenho essa informação nos documentos.")).toBeInTheDocument();
+    expect(screen.queryByText(/Manual\.pdf/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the document chip on a real document answer", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/company")) {
+          return jsonResponse(200, { id: admin.company_id, name: "Mercearia Atlas", slug: "x", default_locale: "pt" });
+        }
+        if (url.endsWith("/assistant/test")) {
+          return jsonResponse(200, {
+            mode: "docs",
+            answer: "Não dispomos de entregas ao domingo.",
+            sources: [{ document_id: "d1", document_name: "Manual.pdf", page: 4 }],
+            elapsed_ms: 9,
+          });
+        }
+        return jsonResponse(404, { detail: { code: "not_found" } });
+      }),
+    );
+    setSession("test-jwt-token", admin);
+    renderPanel("/test");
+    await user.type(await screen.findByLabelText("Question"), "Fazem entregas ao domingo?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("button", { name: "Documento: Manual.pdf p. 4" })).toBeInTheDocument();
   });
 });

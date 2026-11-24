@@ -155,11 +155,12 @@ def test_ask_documents_matched_false_when_search_finds_nothing(monkeypatch):
 @pytest.mark.parametrize(
     ("answer", "expected_pages"),
     [
-        # No [n]: still one chip from the retrieved chunk (document answers always cite).
+        # A real answer without [n] still shows where it came from.
         ("Abre ao domingo das 10 as 14.", [2]),
+        ("Não tenho essa informação nos documentos.", []),
         ("Abre ao domingo das 10 as 14 [1].", [2]),
     ],
-    ids=["no_marker", "with_marker"],
+    ids=["no_marker", "dont_know", "with_marker"],
 )
 def test_ask_documents_matched_true_when_search_finds_text(monkeypatch, answer, expected_pages):
     from site_ai_widget.docs import ask as docs_ask

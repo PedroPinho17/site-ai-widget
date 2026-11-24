@@ -120,6 +120,11 @@ def test_queijos_list_from_products_with_pt_prices_and_no_documents(api, monkeyp
     assert not body.get("sources")
     assert "9,90 €" in body["answer"] and "7,50 €" in body["answer"]
     assert "9.90" not in body["answer"] and "7.50" not in body["answer"]
+    # Prices read like every other answer: "custa 9,90 €", never "por 9,90 €".
+    assert body["answer"] == (
+        "Queijo da Serra da Estrela 200 g custa 9,90 € e Queijo de ovelha curado 300 g custa 7,50 €."
+    )
+    assert " por " not in body["answer"]
 
 
 def _manual_chunks():
@@ -176,6 +181,67 @@ def test_list_reply_has_no_space_before_line_breaks(api, monkeypatch):
     )
     body = _ask(api, "Que queijos têm?")
     assert body["answer"] == (
-        "Temos o Queijo da Serra da Estrela 200 g por 9,90 €.\n"
-        "Temos o Queijo de ovelha curado 300 g por 7,50 €."
+        "O Queijo da Serra da Estrela 200 g custa 9,90 €.\n"
+        "O Queijo de ovelha curado 300 g custa 7,50 €."
     )
+
+
+# --- Reported in the Test assistant -----------------------------------------
+UNKNOWN_PT = "Não consegui responder a isso."
+
+
+@pytest.mark.parametrize(
+    "presenter_reply",
+    [
+        "A Mercearia Atlas - Arroios não tem informação sobre entregas ao domingo.",
+        "NO_ANSWER",
+    ],
+    ids=["model_says_no_information", "model_flags_no_answer"],
+)
+def test_sql_rows_that_do_not_answer_fall_through_to_unknown(api, monkeypatch, presenter_reply):
+    """"Fazem entregas ao domingo?" read stores/opening_hours rows. Those rows do
+    not answer it: no SQL answer, no table chips, documents next, then unknown."""
+    _sql(
+        monkeypatch,
+        ["name", "weekday", "opens", "closes"],
+        [["Mercearia Atlas - Arroios", "domingo", "10:00", "14:00"]],
+        tables=("stores", "opening_hours"),
+    )
+    _llm(monkeypatch, presenter_reply)
+    docs_calls: list[str] = []
+
+    def no_docs(**kwargs):
+        docs_calls.append(kwargs["question"])
+        return {"matched": False, "answer": "", "citations": []}
+
+    monkeypatch.setattr("site_ai_widget.api.routes.assistant.ask_documents", no_docs)
+    body = _ask(api, "Fazem entregas ao domingo?")
+    assert docs_calls == ["Fazem entregas ao domingo?"]
+    assert body["mode"] == "none"
+    assert body["answer"] == UNKNOWN_PT
+    assert not body.get("tables")
+    assert not body.get("sources")
+    assert not body.get("rows")
+
+
+def test_not_found_document_answer_is_unknown_without_chips(api, monkeypatch):
+    """"Têm vinho do Porto?" got "Não consta nos documentos…" with a p. 4 chip."""
+    monkeypatch.setattr(
+        "site_ai_widget.api.routes.assistant.answer_with_sql",
+        lambda *a, **k: SqlAnswer(status="ok", columns=["name"], rows=[], row_count=0, attempts=1),
+    )
+    monkeypatch.setattr("site_ai_widget.docs.ask.hybrid_search", lambda *a, **k: _manual_chunks()[:4])
+    _llm(monkeypatch, "Não consta nos documentos que a Mercearia Atlas ofereça vinho do Porto. [4]")
+    body = _ask(api, "Têm vinho do Porto?")
+    assert body["mode"] == "none"
+    assert body["answer"] == UNKNOWN_PT
+    assert not body.get("sources")
+
+
+def test_sql_rows_that_answer_are_still_presented(api, monkeypatch):
+    """The fall-through only applies to replies that do not answer; prices stay."""
+    _sql(monkeypatch, ["name", "price"], [["Azeite Atlas Premium 750 ml", "8.49"]])
+    _llm(monkeypatch, f"O Azeite Atlas Premium 750{NNBSP}ml custa 8,49{NNBSP}€.")
+    body = _ask(api, "Qual o preço do azeite?")
+    assert body["mode"] == "sql"
+    assert body["answer"] == "O Azeite Atlas Premium 750 ml custa 8,49 €."

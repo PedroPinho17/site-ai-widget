@@ -186,6 +186,29 @@ def test_valid_key_returns_answer_and_session(client):
     _assert_cors(response, ORIGIN)
 
 
+def test_llm_quota_returns_200_with_friendly_answer(client, monkeypatch):
+    monkeypatch.setattr(
+        "site_ai_widget.sqlqa.pipeline.answer_with_sql",
+        lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+    )
+    monkeypatch.setattr(
+        "site_ai_widget.docs.ask.ask_documents",
+        lambda **kwargs: (_ for _ in ()).throw(ApiError("llm_unavailable", 503)),
+    )
+    token, _company = _register(client)
+    key = _make_key(client, token)["public_key"]
+    response = _ask(client, key, question="Fazem entregas ao domingo?", lang="pt")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "none"
+    assert body["answer"] == (
+        "Estou com muitos pedidos neste momento. Tente novamente daqui a um minuto."
+    )
+    assert not body.get("sources")
+    assert "quota" not in response.text.lower()
+    assert "groq" not in response.text.lower()
+
+
 def test_only_the_exact_allowlisted_origin_is_accepted(client, monkeypatch):
     """The allowlist is stored canonical; the header must match it byte for byte."""
     calls = _block_ask_service(monkeypatch)

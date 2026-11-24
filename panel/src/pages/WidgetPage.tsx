@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { ColorPicker } from "@/components/ColorPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -114,10 +115,10 @@ export function WidgetPage() {
     <section className="grid gap-6 lg:grid-cols-[minmax(0,28rem)_1fr]">
       <div className="flex flex-col gap-4">
         <h1 className="text-xl font-semibold">{t("widget.title")}</h1>
-        <label className="flex flex-col gap-1 text-sm">
-          {t("widget.color")}
-          <Input value={primary_color} onChange={(e) => setColor(e.target.value)} />
-        </label>
+        <div className="flex flex-col gap-1 text-sm">
+          <span>{t("widget.color")}</span>
+          <ColorPicker value={primary_color} onChange={setColor} />
+        </div>
         <label className="flex flex-col gap-1 text-sm" htmlFor="position">
           {t("widget.position")}
           <select

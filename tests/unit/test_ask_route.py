@@ -336,8 +336,10 @@ def test_docs_api_error_logged_code_only(ask_app, monkeypatch, caplog):
         r = client.post("/ask", json={"question": SENTINEL_Q})
     assert r.status_code == 200
     assert r.json()["mode"] == "none"
+    assert "minuto" in (r.json().get("answer") or "").lower() or "minute" in (r.json().get("answer") or "").lower()
     text = " ".join(rec.message for rec in caplog.records)
-    assert "ask/docs failed: llm_unavailable" in text
+    assert "ask reason=llm_busy" in text
+    assert "quota" not in text.lower()
     assert SENTINEL_Q not in text
 
 

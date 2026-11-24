@@ -494,7 +494,7 @@ export type SourceChip = {
 };
 
 export function sourceChips(data: AssistantTestResponse): SourceChip[] {
-  if (data.mode === "chat") {
+  if (data.mode === "chat" || data.mode === "none") {
     return [];
   }
   const chips: SourceChip[] = [];

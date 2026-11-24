@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from site_ai_widget.answer_checks import is_no_information, sentence_has_information, split_sentences
+
 _ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
 _ESCAPE_RE = re.compile(r'[&<>"]')
 
@@ -68,27 +70,41 @@ def _citation_from_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_MARKER = re.compile(r"\[(\d+)\]")
+
+
+def answer_uses_sources(answer: str) -> bool:
+    """False for a "no information" reply, even if a stray [n] slipped in."""
+    return not is_no_information(answer)
+
+
 def map_citations(
     answer: str,
     chunks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return document chips for a docs answer.
+    """Document chips for a docs answer.
 
-    Prefer ``[n]`` markers that match retrieved chunks (invented ids are dropped).
-    When the model forgets to cite, fall back to each retrieved document once so the
-    UI still shows source chips. Order follows first appearance in the answer, then
-    chunk order for the fallback.
+    * A "no information" sentence never produces a chip, even with a stray [n].
+    * Other sentences give their ``[n]`` markers that match retrieved chunks
+      (invented ids are dropped), in order of first appearance.
+    * A real answer where the model forgot to cite falls back to each retrieved
+      document once; a reply that only says "no information" gets none.
     """
     by_n = {int(c["n"]): c for c in chunks}
     seen: set[int] = set()
     out: list[dict[str, Any]] = []
-    for match in re.finditer(r"\[(\d+)\]", answer):
-        n = int(match.group(1))
-        if n in seen or n not in by_n:
+    informative = False
+    for sentence in split_sentences(answer):
+        if not sentence_has_information(sentence):
             continue
-        seen.add(n)
-        out.append(_citation_from_chunk(by_n[n]))
-    if out:
+        informative = True
+        for match in _MARKER.finditer(sentence):
+            n = int(match.group(1))
+            if n in seen or n not in by_n:
+                continue
+            seen.add(n)
+            out.append(_citation_from_chunk(by_n[n]))
+    if out or not informative:
         return out
     seen_docs: set[str] = set()
     for chunk in chunks:

@@ -94,7 +94,7 @@ def test_history_prefers_stored_assistant_text():
     assert 'typeof item.text === "string" && item.text' in text
     assert 'item.mode === "sql"' in text
     assert "rowsMany" in text and "rowsOne" in text
-    assert "self._add(item.role, text);" in text
+    assert "self._add(item.role, text, null, item.created_at);" in text
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -153,6 +153,11 @@ def test_source_chips_expand_and_typing_in_embed():
         {"mode": "docs", "sources": [{"document_name": "Manual.pdf", "page": 2}], "tables": []},
         {"mode": "sql", "sources": [], "tables": ["products"]},
         {"mode": "chat", "answer": "Olá!", "sources": [], "tables": []},
+        {
+            "mode": "none",
+            "answer": "Não tenho essa informação.",
+            "sources": [{"document_name": "Manual.pdf", "page": 1}],
+        },
     ]
     results = {}
     for lang, labels in {
@@ -177,8 +182,14 @@ def test_source_chips_expand_and_typing_in_embed():
         )
         assert result.returncode == 0, result.stderr
         results[lang] = json.loads(result.stdout)
-    assert results["pt"] == [["Documento: Manual.pdf p. 2"], [], []]
-    assert results["en"] == [["Document: Manual.pdf p. 2"], [], []]
+    assert results["pt"] == [["Documento: Manual.pdf p. 2"], [], [], []]
+    assert results["en"] == [["Document: Manual.pdf p. 2"], [], [], []]
+    assert "max-width: 760px" in source
+    assert "copy.clearConfirm" in source
+    assert "--sai-on" in source
+    assert "_confirmClear" in source
+    assert "sessionStorage.removeItem" in source
+    assert "function contrastOn" in source
     assert "Base de dados" not in source
     assert "data.tables" not in source
     assert "is-full" in source
@@ -309,7 +320,8 @@ def test_token_storage_is_per_widget_key():
     text = _js()
     assert 'var storageKey = "site-ai-widget:" + key + ":session";' in text
     assert "document.cookie" not in text
-    assert "sessionStorage" not in text
+    assert "sessionStorage.getItem" not in text
+    assert "sessionStorage.setItem" not in text
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

@@ -13,15 +13,29 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from site_ai_widget.answer_checks import is_no_information
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.greetings import small_talk_reply
 from site_ai_widget.reply_lang import resolve_answer_lang
-from site_ai_widget.sqlqa.present import format_sql_answer_deterministic, present_sql_answer
+from site_ai_widget.sqlqa.present import (
+    NOT_ANSWERED,
+    format_sql_answer_deterministic,
+    present_sql_answer,
+)
 
 log = logging.getLogger("site_ai_widget")
 
 _NONE_MESSAGE = "I could not answer that from the connected database or your documents."
+# Same wording as the widget's own unknown-answer copy (embed.js emptyAnswer).
+_UNKNOWN_ANSWER = {
+    "pt": "Não consegui responder a isso.",
+    "en": "I could not answer that.",
+}
+_BUSY_MESSAGE = {
+    "pt": "Estou com muitos pedidos neste momento. Tente novamente daqui a um minuto.",
+    "en": "I am receiving many requests right now. Please try again in a minute.",
+}
 _MAX_SQL_ROWS = 500
 _HARD_QUESTION_CHARS = 1000
 
@@ -45,6 +59,9 @@ class AskResponse(BaseModel):
     # Language of this answer; clients send it back as previous_lang.
     lang: Literal["pt", "en"] | None = None
     message: str | None = None
+    # "busy": every LLM key is cooling down. ``answer`` holds a friendly pt/en
+    # text; clients may show their own localized copy. Never a provider detail.
+    notice: Literal["busy"] | None = None
 
 
 def answer_question(
@@ -102,10 +119,16 @@ def answer_question(
         present_fn = present_sql_answer
 
     sql_answer = None
+    llm_busy = False
     try:
         sql_answer = sql_fn(company_id, question)
+    except ApiError as exc:
+        llm_busy = exc.code == "llm_unavailable"
+        log.warning("ask/sql failed: %s", exc.code)
     except Exception as exc:
         log.warning("ask/sql failed: %s", type(exc).__name__)
+    if sql_answer is not None and getattr(sql_answer, "reason", None) == "llm_busy":
+        llm_busy = True
 
     if sql_answer is None:
         log.info("ask/sql stage=skip reason=error")
@@ -155,35 +178,79 @@ def answer_question(
                 currency=currency,
                 products=products,
             )
-        return AskResponse(
-            mode="sql",
-            columns=columns,
-            rows=rows,
-            row_count=min(sql_answer.row_count, len(rows)),
-            truncated=truncated,
-            answer=answer,
-            tables=list(getattr(sql_answer, "tables", []) or []),
-            elapsed_ms=_elapsed(started), lang=effective_lang,
-        )
+        if answer == NOT_ANSWERED or is_no_information(answer):
+            # The rows do not answer this question (e.g. opening hours for a
+            # delivery question): never present them, try documents instead.
+            log.info("ask/sql stage=skip reason=not_answered rows=%s", len(rows))
+        else:
+            return AskResponse(
+                mode="sql",
+                columns=columns,
+                rows=rows,
+                row_count=min(sql_answer.row_count, len(rows)),
+                truncated=truncated,
+                answer=answer,
+                tables=list(getattr(sql_answer, "tables", []) or []),
+                elapsed_ms=_elapsed(started),
+                lang=effective_lang,
+            )
 
     try:
         docs = docs_fn(company_id=company_id, question=question)
     except ApiError as exc:
+        if exc.code == "llm_unavailable":
+            log.warning("ask reason=llm_busy")
+            return _busy_response(effective_lang, started)
         log.warning("ask/docs failed: %s", exc.code)
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
+        return _unknown_response(effective_lang, started)
     except Exception as exc:
         log.warning("ask/docs failed: %s", type(exc).__name__)
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
+        return _unknown_response(effective_lang, started)
 
     # Decide from search hits (matched), not from whether the answer cited [n].
     if not docs.get("matched"):
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
+        if llm_busy:
+            # The SQL stage could not run, so "not found" would be a guess.
+            log.warning("ask reason=llm_busy")
+            return _busy_response(effective_lang, started)
+        return _unknown_response(effective_lang, started)
 
+    if is_no_information(docs.get("answer") or ""):
+        # "Não consta nos documentos…": an unknown answer, worded like the
+        # others, with no chips and counted as unanswered.
+        log.info("ask/docs stage=none reason=no_information")
+        return _unknown_response(effective_lang, started)
+    citations = [AskCitation(**c) for c in docs.get("citations") or []]
     return AskResponse(
         mode="docs",
         answer=docs["answer"],
-        sources=[AskCitation(**c) for c in docs["citations"]],
+        sources=citations,
         elapsed_ms=_elapsed(started), lang=effective_lang,
+    )
+
+
+def _busy_message(lang: str | None) -> str:
+    # Portuguese is the product default when the language is not known yet.
+    return _BUSY_MESSAGE["en"] if lang == "en" else _BUSY_MESSAGE["pt"]
+
+
+def _unknown_response(lang: str | None, started: float) -> AskResponse:
+    return AskResponse(
+        mode="none",
+        answer=_UNKNOWN_ANSWER["en"] if lang == "en" else _UNKNOWN_ANSWER["pt"],
+        message=_NONE_MESSAGE,
+        elapsed_ms=_elapsed(started),
+        lang=lang,
+    )
+
+
+def _busy_response(lang: str | None, started: float) -> AskResponse:
+    return AskResponse(
+        mode="none",
+        answer=_busy_message(lang),
+        notice="busy",
+        elapsed_ms=_elapsed(started),
+        lang=lang,
     )
 
 

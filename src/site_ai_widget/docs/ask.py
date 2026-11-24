@@ -88,6 +88,6 @@ def ask_documents(
     answer = complete(messages, temperature=0)
     answer = restore_source_spacing(answer, chunks)
     citations = map_citations(answer, chunks)
-    # matched=True whenever search returned chunks. Citations always include at
-    # least one chip per retrieved document (from [n] or a chunk fallback).
+    # matched=True whenever search returned chunks. No chips on a "no information"
+    # reply; otherwise [n] chips, or one per retrieved document if none were cited.
     return {"answer": answer, "citations": citations, "matched": True}

@@ -15,6 +15,7 @@ from typing import Literal
 import sqlglot
 from sqlglot import exp
 
+from site_ai_widget.api.errors import ApiError
 from site_ai_widget.llm.client import complete_chat
 from site_ai_widget.sqlqa.catalog import is_catalog_question
 from site_ai_widget.sqlqa.generator import generate_sql, retry_hint
@@ -61,13 +62,22 @@ def answer_with_sql(
 
     for attempt in (1, 2):
         attempts = attempt
-        sql = generate_sql(
-            question,
-            schema,
-            company_id=company_id,
-            previous_error=previous_error,
-            llm_complete=complete,
-        )
+        try:
+            sql = generate_sql(
+                question,
+                schema,
+                company_id=company_id,
+                previous_error=previous_error,
+                llm_complete=complete,
+            )
+        except ApiError as exc:
+            if exc.code == "llm_unavailable":
+                log.info("ask/sql stage=skip reason=llm_busy")
+                return _finish(
+                    company_id,
+                    SqlAnswer(status="error", reason="llm_busy", attempts=attempts or 1),
+                )
+            raise
         if sql is None:
             return _finish(company_id, SqlAnswer(status="no_sql", attempts=attempts))
 

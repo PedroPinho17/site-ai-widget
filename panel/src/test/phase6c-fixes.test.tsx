@@ -200,3 +200,39 @@ describe("panel language", () => {
     expect(messageForCode("forbidden")).toBe("You do not have permission to do that.");
   });
 });
+
+describe("widget colour picker", () => {
+  it("keeps the colour input and hex field in sync and lists presets", async () => {
+    vi.stubGlobal("fetch", baseFetch());
+    setSession("test-jwt-token", admin);
+    const user = userEvent.setup();
+    renderPanel("/widget");
+    const picker = await screen.findByLabelText("Primary colour");
+    expect(picker).toHaveAttribute("type", "color");
+    const hex = await screen.findByLabelText("Hex colour");
+    await waitFor(() => expect(hex).toHaveValue("#0f766e"));
+    fireEvent.change(hex, { target: { value: "#2563eb" } });
+    expect(hex).toHaveValue("#2563eb");
+    const preset = screen.getByRole("button", { name: "#be123c" });
+    expect(preset).toHaveAttribute("aria-pressed", "false");
+    await user.click(preset);
+    expect(hex).toHaveValue("#be123c");
+    expect(preset).toHaveAttribute("aria-pressed", "true");
+    expect(picker).toHaveValue("#be123c");
+  });
+
+  it("flags an invalid hex and does not send it", async () => {
+    const fetchMock = baseFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    setSession("test-jwt-token", admin);
+    const user = userEvent.setup();
+    renderPanel("/widget");
+    const hex = await screen.findByLabelText("Hex colour");
+    await waitFor(() => expect(hex).toHaveValue("#0f766e"));
+    fireEvent.change(hex, { target: { value: "#12zz" } });
+    expect(hex).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Use a colour like #2563eb.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+  });
+});

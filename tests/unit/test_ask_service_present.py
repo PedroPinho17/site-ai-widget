@@ -125,7 +125,9 @@ def test_empty_sql_and_docs_miss_is_none():
         present_fn=lambda *a, **k: "should not present",
     )
     assert out.mode == "none"
-    assert out.answer is None
+    # Every unknown answer has the same localized wording (= widget emptyAnswer).
+    assert out.answer == "Não consegui responder a isso."
+    assert not out.sources
 
 
 def test_truncated_flag_reaches_the_answer_and_presenter_failure_falls_back():
@@ -177,6 +179,71 @@ def test_docs_answers_always_include_source_chips():
     assert len(out.sources) == 1
     assert out.sources[0].document_name == "politica-devolucoes.pdf"
     assert out.sources[0].document_id == doc_id
+
+
+def test_dont_know_docs_answer_has_no_source_chips():
+    out = answer_question(
+        uuid4(),
+        "Fazem entregas ao domingo?",
+        lang="pt",
+        sql_fn=lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+        docs_fn=lambda **k: {
+            "matched": True,
+            "answer": "Não tenho essa informação nos documentos.",
+            "citations": [],
+        },
+    )
+    # A "não sei" document reply is an unknown answer: same wording, no chips.
+    assert out.mode == "none"
+    assert out.answer == "Não consegui responder a isso."
+    assert not out.sources
+
+
+def test_llm_busy_with_sql_rows_uses_deterministic_answer():
+    from site_ai_widget.api.errors import ApiError
+
+    def boom(*a, **k):
+        raise ApiError("llm_unavailable", 503)
+
+    out = answer_question(
+        uuid4(),
+        "Qual o preço do azeite?",
+        lang="pt",
+        sql_fn=lambda *a, **k: SqlAnswer(
+            status="ok",
+            columns=["name", "price"],
+            rows=[["Azeite", "8.49"]],
+            row_count=1,
+            truncated=False,
+            attempts=1,
+        ),
+        docs_fn=lambda **k: (_ for _ in ()).throw(AssertionError("docs must not run")),
+        present_fn=boom,
+    )
+    assert out.mode == "sql"
+    assert out.answer
+    assert "503" not in out.answer
+    assert "quota" not in out.answer.lower()
+
+
+def test_llm_busy_without_rows_returns_friendly_200(caplog):
+    from site_ai_widget.api.errors import ApiError
+
+    with caplog.at_level("WARNING", logger="site_ai_widget"):
+        out = answer_question(
+            uuid4(),
+            "Fazem entregas ao domingo?",
+            lang="pt",
+            sql_fn=lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+            docs_fn=lambda **k: (_ for _ in ()).throw(ApiError("llm_unavailable", 503)),
+        )
+    assert out.mode == "none"
+    assert out.answer == (
+        "Estou com muitos pedidos neste momento. Tente novamente daqui a um minuto."
+    )
+    assert not out.sources
+    assert "ask reason=llm_busy" in caplog.text
+    assert "quota" not in caplog.text.lower()
 
 
 def test_sql_presenter_receives_company_currency(monkeypatch):

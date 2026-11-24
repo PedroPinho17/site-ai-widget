@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from site_ai_widget.sqlqa.present import (
+    NOT_ANSWERED,
     format_sql_answer_deterministic,
     present_sql_answer,
 )
@@ -209,10 +210,24 @@ def test_one_row_validation_failure_uses_labeled_fallback_not_not_found():
         [["Azeite da serra, lata de 500 ml", Decimal("8.49")]],
         "pt",
         question="Qual o preço do azeite?",
-        llm_complete=lambda messages, *, temperature=0: "Não encontrei essa informação.",
+        llm_complete=lambda messages, *, temperature=0: "O azeite custa 9,99 €.",  # invented price
     )
     assert text == "Azeite da serra, lata de 500 ml — 8,49"
-    assert "Não encontrei" not in text
+    assert "9,99" not in text
+
+
+def test_reply_saying_the_rows_do_not_answer_is_not_presented():
+    """When the model says the rows hold no answer, the caller tries documents:
+    neither the reply nor the row list is shown as a SQL answer."""
+    for reply in ("Não encontrei essa informação.", "NO_ANSWER"):
+        text = present_sql_answer(
+            ["name", "price"],
+            [["Azeite da serra, lata de 500 ml", Decimal("8.49")]],
+            "pt",
+            question="Fazem entregas ao domingo?",
+            llm_complete=lambda messages, *, temperature=0, r=reply: r,
+        )
+        assert text == NOT_ANSWERED
 
 
 def test_one_row_llm_error_uses_labeled_fallback(caplog):
@@ -568,7 +583,7 @@ def test_pt_reply_with_a_decimal_point_falls_back_and_nothing_is_rewritten():
 
 
 def test_links_in_values_are_not_rewritten():
-    reply = "Veja a Loja em https://loja.example/p/1.5 por 8,49 €."
+    reply = "A Loja em https://loja.example/p/1.5 custa 8,49 €."
     text = present_sql_answer(
         ["name", "url", "price"],
         [["Loja", "https://loja.example/p/1.5", Decimal("8.49")]],
@@ -927,3 +942,37 @@ def test_contact_words_are_fine_when_the_rows_have_contact_data():
         llm_complete=lambda messages, *, temperature=0: reply,
     )
     assert text == reply
+
+
+def test_pt_prices_always_say_custa():
+    from site_ai_widget.sqlqa.present import consistent_price_wording
+
+    assert consistent_price_wording("- Queijo da Serra por 9,90 €") == "- Queijo da Serra custa 9,90 €"
+    assert consistent_price_wording("Temos o Queijo da Serra por 9,90 €.") == "O Queijo da Serra custa 9,90 €."
+    assert consistent_price_wording("Pode pagar por MB Way.") == "Pode pagar por MB Way."
+    # A "por <preço>" the rewrite cannot fix is refused, so the list is shown instead.
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Queijo da Serra", Decimal("9.90")]],
+        "pt",
+        question="Que queijos têm?",
+        currency="EUR",
+        llm_complete=lambda messages, *, temperature=0: "Recomendo o Queijo da Serra por 9,90 €.",
+    )
+    assert " por " not in text
+    assert "9,90 €" in text
+
+
+def test_presenter_prompt_asks_for_custa_and_no_answer_token():
+    seen = []
+
+    def capture(messages, *, temperature=0):
+        seen.append(messages[0]["content"])
+        return "O Queijo da Serra custa 9,90 €."
+
+    present_sql_answer(
+        ["name", "price"], [["Queijo da Serra", Decimal("9.90")]], "pt",
+        question="Que queijos têm?", currency="EUR", llm_complete=capture,
+    )
+    assert "custa" in seen[0] and "never 'por" in seen[0]
+    assert "NO_ANSWER" in seen[0]

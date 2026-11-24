@@ -152,7 +152,9 @@ def append_turn(
 ) -> None:
     """Store the visitor question and the public answer. Never stores SQL."""
     assistant_text = result.answer if result.answer is not None else result.message
-    unanswered = result.mode == "none"
+    # A busy notice (LLM quota) is not a gap in the company's content, so it is
+    # not counted as unanswered in the dashboard.
+    unanswered = result.mode == "none" and getattr(result, "notice", None) != "busy"
     with connection() as conn:
         conn.execute(
             """
