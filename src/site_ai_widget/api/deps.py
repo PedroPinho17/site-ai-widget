@@ -1,6 +1,8 @@
 """Shared FastAPI dependencies: rate limits and authenticated user."""
 from __future__ import annotations
 
+from threading import Lock
+
 from fastapi import Depends, Request
 
 from site_ai_widget.api.auth import current_user
@@ -13,34 +15,43 @@ _settings = None
 auth_limiter: RateLimiter | None = None
 api_limiter: RateLimiter | None = None
 ask_limiter: RateLimiter | None = None
+widget_key_limiter: RateLimiter | None = None
+_widget_charge_lock = Lock()
 
 
 def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
-    global _settings, auth_limiter, api_limiter, ask_limiter
+    global _settings, auth_limiter, api_limiter, ask_limiter, widget_key_limiter
     settings = get_settings()
     if (
         auth_limiter is None
         or api_limiter is None
         or ask_limiter is None
+        or widget_key_limiter is None
         or _settings is None
         or _settings.auth_rate_limit != settings.auth_rate_limit
         or _settings.api_rate_limit != settings.api_rate_limit
         or _settings.ask_rate_limit != settings.ask_rate_limit
         or _settings.ask_rate_limit_window != settings.ask_rate_limit_window
+        or _settings.widget_key_rate_limit != settings.widget_key_rate_limit
+        or _settings.widget_key_rate_limit_window != settings.widget_key_rate_limit_window
     ):
         auth_limiter = RateLimiter(settings.auth_rate_limit, settings.auth_rate_limit_window)
         api_limiter = RateLimiter(settings.api_rate_limit, settings.api_rate_limit_window)
         ask_limiter = RateLimiter(settings.ask_rate_limit, settings.ask_rate_limit_window)
+        widget_key_limiter = RateLimiter(
+            settings.widget_key_rate_limit, settings.widget_key_rate_limit_window
+        )
         _settings = settings
     return auth_limiter, api_limiter, ask_limiter
 
 
 def reset_limiters() -> None:
     """Clear in-memory counters (tests)."""
-    global auth_limiter, api_limiter, ask_limiter, _settings
+    global auth_limiter, api_limiter, ask_limiter, widget_key_limiter, _settings
     auth_limiter = None
     api_limiter = None
     ask_limiter = None
+    widget_key_limiter = None
     _settings = None
     from site_ai_widget.api.routes.db_connection import reset_db_connection_limiters
 
@@ -84,6 +95,38 @@ def _ask_rate(request: Request, *, weight: int) -> str:
     ip = resolve_client_ip(request)
     limiter.check(f"ask:{ip}", n=weight)
     return ip
+
+
+def charge_widget_ask(request: Request, key_id: str) -> str:
+    """Charge the per-IP ask bucket (weight 3) and the per-key bucket (weight 1).
+
+    Neither bucket is spent unless both have room. ``key_id`` is the key's uuid,
+    not the public key.
+    """
+    _, _, ask = _ensure_limiters()
+    per_key = widget_key_limiter
+    if per_key is None:
+        raise RuntimeError("widget key limiter was not initialised")
+    ip = resolve_client_ip(request)
+    ip_key = f"ask:{ip}"
+    wk = f"widget-key:{key_id}"
+    with _widget_charge_lock:
+        if not ask.fits(ip_key, n=3):
+            ask.check(ip_key, n=3)
+        if not per_key.fits(wk, n=1):
+            per_key.check(wk, n=1)
+        ask.check(ip_key, n=3)
+        per_key.check(wk, n=1)
+    return ip
+
+
+def charge_widget_history(request: Request) -> str:
+    """History reads take one slot in the general per-IP API bucket.
+
+    No LLM runs, so the heavier ask bucket is not spent; but a forged Origin
+    from a non-browser client must not get unlimited database reads.
+    """
+    return require_api_rate(request)
 
 
 def panel_user(

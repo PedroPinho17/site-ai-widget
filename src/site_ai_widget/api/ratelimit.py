@@ -99,3 +99,22 @@ class RateLimiter:
                     self._calls[key] = calls
                 for _ in range(weight):
                     calls.append(now)
+
+    def fits(self, key: str, *, n: int = 1) -> bool:
+        """True if ``n`` more calls would fit. Does not record them.
+
+        Expired timestamps are pruned, same as :meth:`check`.
+        """
+        weight = min(max(1, int(n)), self.max_calls)
+        now = time.monotonic()
+        with self._lock:
+            if now - self._last_sweep > self.per_seconds:
+                self._sweep(now)
+            calls = self._calls.get(key)
+            if not calls:
+                return True
+            self._prune(calls, now)
+            if not calls:
+                del self._calls[key]
+                return True
+            return len(calls) + weight <= self.max_calls

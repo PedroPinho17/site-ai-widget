@@ -1,7 +1,7 @@
 # site-ai-widget
 
-Embeddable AI chat widget for company websites. **Phase 2** adds company PDF
-documents and hybrid RAG Q&A on the panel API (no public widget embed yet).
+Embeddable AI chat widget for company websites. The panel API covers documents
+and text-to-SQL. Allowed websites call the public widget API below.
 
 ## Requirements
 
@@ -107,10 +107,10 @@ treat them as instructions to the model or as a substitute for approval.
 
 ### POST /ask
 
-Unified Q&A for the panel (and later the widget). Body: `{"question": "..."}`
+Unified Q&A for the panel. Body: `{"question": "..."}`
 (hard-capped at 1000 characters, even if `MAX_QUESTION_CHARS` is higher).
-`company_id` comes from the JWT (`current_user`) only — never from the body
-and there is no API-key path on this route yet.
+`company_id` comes from the JWT (`current_user`) only — never from the body.
+The public widget calls the same answer flow through `POST /v1/widget/{key}/ask`.
 
 Fallback order:
 
@@ -147,6 +147,49 @@ tried only when the first one hits a 429 / quota. Chat requests use
 document left in `processing` is only reset when `updated_at` is older than
 `DOCUMENT_STUCK_PROCESSING_SECONDS` (default 180), so a live API worker is not
 interrupted.
+
+### Widget API
+
+Public routes for an embedded widget. There is no panel JWT. The `wk_…` key is
+in the path so a browser preflight can be checked before the body is read.
+CORS is only on `/v1/widget/*` (never a global `*`, never credentials).
+
+`POST /v1/widget/{key}/ask` with:
+
+```json
+{"question": "...", "session_token": null, "lang": "pt"}
+```
+
+`lang` is `pt`, `en` or null. Extra fields are rejected.
+
+- Unknown and inactive keys both return **401** `widget_key_invalid`.
+- `Origin` is required and must equal one allowlisted origin exactly. Entries
+  are stored canonical (`scheme://host[:port]`, host lowercased, no trailing
+  slash, default port dropped), which is what browsers send. A variant such as
+  `https://Shop.Example/` or `https://shop.example:443`, a missing `Origin`, or a
+  different scheme or port returns **403** `origin_not_allowed`. `Referer` is
+  ignored.
+  The question does not run when the key or origin check fails.
+- The question uses the same rules as `POST /ask` (trimmed, empty is **422**,
+  hard cap 1000).
+- Each call takes **3** slots in the per-IP ask bucket and **1** slot in
+  `WIDGET_KEY_RATE_LIMIT` (default **60 per minute**, minimum 3).
+- A null, unknown, expired (24h idle) or other-company `session_token` starts a
+  new visitor session. The raw token is returned once; only its SHA-256 hash is
+  stored. Sessions are not shared across companies.
+- The response is the `/ask` body plus `session_token`. It never includes SQL,
+  schema text, prompts or database errors. Logs may include a short key prefix,
+  never the question, the answer, the session token or the full key.
+
+`POST /v1/widget/{key}/history` with `{"session_token": "..."}` uses the same
+key and origin checks, then takes **1** slot in the per-IP `API_RATE_LIMIT`
+bucket. It returns that session's last 50 messages, oldest first. An unknown,
+other-company or expired (24h idle) session returns an empty list.
+
+A preflight (`OPTIONS`) from an allowlisted origin gets
+`Access-Control-Allow-Origin` set to that request's `Origin`, `Vary: Origin`,
+`POST`, `Content-Type` and `Access-Control-Max-Age: 600`. Any other origin gets
+no CORS headers. Every `/v1/widget/*` response carries `Vary: Origin`.
 
 Request bodies are capped before parsing: `POST /documents` at
 `MAX_UPLOAD_MB` + 1 MiB, every other route at 1 MiB (**413** `upload_too_large`).
@@ -196,6 +239,8 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | DELETE | `/documents/{id}` | admin; removes file + chunks |
 | POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |
 | POST | `/ask/docs` | hybrid RAG answer + citations (docs only) |
+| POST | `/v1/widget/{key}/ask` | public; origin allowlist; returns `session_token` |
+| POST | `/v1/widget/{key}/history` | public; last 50 messages for that session |
 
 Cross-company resources return **404** (not 403); that includes
 `/ask/docs` with another company's `document_ids`.

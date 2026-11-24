@@ -34,6 +34,8 @@ MESSAGES = {
     "pw_wrong_current": "Current password is wrong.",
     "pw_same": "New password must differ from the current one.",
     "bad_origin": "Invalid origin URL.",
+    "widget_key_invalid": "Invalid widget key.",
+    "origin_not_allowed": "Origin is not allowed.",
     "validation_error": "Invalid request.",
     "not_pdf": "File is not a PDF (missing %PDF- signature).",
     "upload_too_large": "File exceeds the maximum size of {n} MB.",

@@ -19,8 +19,10 @@ from site_ai_widget.api.routes import (
     db_connection,
     documents,
     health,
+    widget,
     widget_keys,
 )
+from site_ai_widget.api.widget_cors import WidgetCorsMiddleware
 from site_ai_widget.db import pool as db_pool
 from site_ai_widget.docs.storage import upload_root
 from site_ai_widget.docs.worker import recover_stuck_documents, shutdown_worker
@@ -88,6 +90,9 @@ def create_app() -> FastAPI:
         BodySizeLimitMiddleware,
         limit_for=default_limit_for(settings.max_upload_bytes),
     )
+    # Outermost so preflight is answered here. Scoped to /v1/widget/* — not a
+    # global wildcard CORS middleware.
+    app.add_middleware(WidgetCorsMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_request: Request, exc: RequestValidationError):
@@ -113,6 +118,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_routes.router)
     app.include_router(company.router)
     app.include_router(widget_keys.router)
+    app.include_router(widget.router)
     app.include_router(documents.router)
     app.include_router(ask_docs.router)
     app.include_router(ask.router)
