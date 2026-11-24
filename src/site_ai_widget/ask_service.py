@@ -89,7 +89,13 @@ def answer_question(
         columns = list(sql_answer.columns)
         truncated = bool(sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS)
         try:
-            answer = present_fn(columns, rows, lang, truncated=truncated)
+            answer = present_fn(
+                columns,
+                rows,
+                lang,
+                truncated=truncated,
+                question=question,
+            )
         except Exception as exc:
             log.warning("ask/sql present failed: %s", type(exc).__name__)
             answer = format_sql_answer_deterministic(columns, rows, lang, truncated=truncated)

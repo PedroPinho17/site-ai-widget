@@ -21,9 +21,9 @@ def test_sql_answer_uses_present_fn_lang_and_no_sql():
             attempts=1,
         )
 
-    def present(columns, rows, lang, *, truncated=False):
-        seen.append((columns, rows, lang, truncated))
-        return "Azeite: 8,90"
+    def present(columns, rows, lang, *, truncated=False, question=None):
+        seen.append((columns, rows, lang, truncated, question))
+        return "O azeite custa 8,9."
 
     out = answer_question(
         company,
@@ -34,8 +34,10 @@ def test_sql_answer_uses_present_fn_lang_and_no_sql():
         present_fn=present,
     )
     assert out.mode == "sql"
-    assert out.answer == "Azeite: 8,90"
-    assert seen == [(["name", "price"], [["Azeite", 8.9]], "pt", False)]
+    assert out.answer == "O azeite custa 8,9."
+    assert seen == [
+        (["name", "price"], [["Azeite", 8.9]], "pt", False, "Qual o preço do azeite?")
+    ]
     assert "SELECT" not in (out.answer or "")
 
 
@@ -61,7 +63,7 @@ def test_empty_sql_rows_get_not_found_answer():
 
 
 def test_truncated_flag_reaches_the_answer_and_presenter_failure_falls_back():
-    def boom(columns, rows, lang, *, truncated=False):
+    def boom(columns, rows, lang, *, truncated=False, question=None):
         raise RuntimeError("presenter bug")
 
     out = answer_question(

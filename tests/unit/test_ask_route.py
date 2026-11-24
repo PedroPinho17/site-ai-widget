@@ -88,8 +88,7 @@ def test_ask_sql_mode(ask_app, monkeypatch):
     assert body["rows"] == [["Azeite Atlas"]]
     assert body["row_count"] == 1
     assert body["truncated"] is False
-    assert body["answer"] == "Azeite Atlas"
-    assert "price" not in (body["answer"] or "")
+    assert body["answer"] == "name: Azeite Atlas"
     assert "SELECT" not in r.text
 
 

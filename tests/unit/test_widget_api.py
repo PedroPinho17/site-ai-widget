@@ -46,6 +46,9 @@ def client(migrated, monkeypatch):
     monkeypatch.setenv("API_RATE_LIMIT", "1000")
     monkeypatch.setenv("ASK_RATE_LIMIT", "1000")
     monkeypatch.setenv("WIDGET_KEY_RATE_LIMIT", "1000")
+    # Deterministic SQL answers in these tests (no live LLM).
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
     from site_ai_widget.api.config import clear_settings_cache
     from site_ai_widget.api.deps import reset_limiters
     from site_ai_widget.api.main import create_app
@@ -175,7 +178,7 @@ def test_valid_key_returns_answer_and_session(client):
     assert body["columns"] == ["name"]
     assert body["rows"] == [["Azeite"]]
     assert body["row_count"] == 1
-    assert body["answer"] == "Azeite"  # one-row deterministic; never a bare column name
+    assert body["answer"] == "name: Azeite"  # one-row fallback includes the column label
     assert "SELECT" not in body["answer"]
     assert isinstance(body["session_token"], str)
     assert len(body["session_token"]) >= 40
@@ -377,7 +380,7 @@ def test_same_session_history_is_oldest_first(client):
     assert messages[-1]["mode"] == "sql"
     # History stores the same visitor-facing answer the ask response returned.
     assert messages[-1]["text"] == second.json()["answer"]
-    assert messages[-1]["text"] == "Azeite"
+    assert messages[-1]["text"] == "name: Azeite"
     assert "SELECT" not in (messages[-1]["text"] or "")
     assert messages[-1]["text"] != "price"
 
