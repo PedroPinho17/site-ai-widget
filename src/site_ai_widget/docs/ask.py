@@ -86,5 +86,6 @@ def ask_documents(
     log.info("ask/docs company=%s chunks=%s", company_id, len(chunks))
     answer = complete(messages, temperature=0)
     citations = map_citations(answer, chunks)
-    # matched=True even when the answer has no [n] markers (citations may be empty).
+    # matched=True whenever search returned chunks. Citations always include at
+    # least one chip per retrieved document (from [n] or a chunk fallback).
     return {"answer": answer, "citations": citations, "matched": True}

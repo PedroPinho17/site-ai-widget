@@ -1,5 +1,10 @@
 -- Base de dados de demo da Mercearia Atlas (dados 100% inventados).
 
+-- Accent-insensitive product search (pão ≈ pao). The widget rewrites text filters
+-- with unaccent(lower(col)) ILIKE unaccent(lower('%word%')) when this exists, and
+-- falls back to plain ILIKE if the extension is missing on a real client DB.
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
 CREATE TABLE categories (
     id   serial PRIMARY KEY,
     name text NOT NULL UNIQUE

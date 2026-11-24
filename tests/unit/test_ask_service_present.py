@@ -112,3 +112,62 @@ def test_truncated_flag_reaches_the_answer_and_presenter_failure_falls_back():
     assert out.truncated is True
     assert out.answer is not None
     assert out.answer.splitlines()[-1] == "and more than 490 more"
+
+
+def test_docs_answers_always_include_source_chips():
+    doc_id = str(uuid4())
+
+    out = answer_question(
+        uuid4(),
+        "Qual a política de devoluções?",
+        lang="pt",
+        sql_fn=lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+        docs_fn=lambda **k: {
+            "matched": True,
+            "answer": "Pode devolver em 14 dias.",
+            "citations": [
+                {
+                    "document_id": doc_id,
+                    "document_name": "politica-devolucoes.pdf",
+                    "page": 1,
+                }
+            ],
+        },
+    )
+    assert out.mode == "docs"
+    assert out.sources is not None
+    assert len(out.sources) == 1
+    assert out.sources[0].document_name == "politica-devolucoes.pdf"
+    assert out.sources[0].document_id == doc_id
+
+
+def test_sql_presenter_receives_company_currency(monkeypatch):
+    company = uuid4()
+    seen: dict[str, object] = {}
+
+    def present(columns, rows, lang, *, truncated=False, question=None, currency=None):
+        seen["currency"] = currency
+        return "Azeite — 8,49 €"
+
+    monkeypatch.setattr(
+        "site_ai_widget.ask_service._company_currency",
+        lambda cid: "EUR",
+    )
+    out = answer_question(
+        company,
+        "Qual o preço do azeite?",
+        lang="pt",
+        sql_fn=lambda *a, **k: SqlAnswer(
+            status="ok",
+            columns=["name", "price"],
+            rows=[["Azeite", "8.49"]],
+            row_count=1,
+            truncated=False,
+            attempts=1,
+        ),
+        docs_fn=lambda **k: {"matched": False},
+        present_fn=present,
+    )
+    assert out.mode == "sql"
+    assert seen["currency"] == "EUR"
+    assert out.answer == "Azeite — 8,49 €"

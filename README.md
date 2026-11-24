@@ -71,6 +71,12 @@ docker compose up -d clientdb
 > docker compose up -d clientdb
 > ```
 
+The demo init script enables the Postgres `unaccent` extension so product search
+can treat `pão` and `pao` as the same. Text-to-SQL uses
+`unaccent(lower(col)) ILIKE unaccent(lower('%word%'))` when available; if a real
+client database does not have the extension, the runner strips `unaccent(...)`
+and falls back to plain `ILIKE` (accent-sensitive).
+
 `atlas_readonly` can only `SELECT`: every session is read-only, has a 5 s
 statement timeout, and cannot create temp tables. It can still read personal
 columns such as `customers.nif`; the widget never sends those to the AI,

@@ -762,3 +762,143 @@ def test_single_row_may_shorten_the_name_but_several_rows_may_not():
         ),
     )
     assert mixed == "Azeite Atlas — 8,49 €\nQueijo Premium — 12 €"
+
+
+def test_stringified_decimal_prices_get_pt_comma_and_euro():
+    """Runner JSON-safes Decimal as '8.49'; money columns must still format."""
+    one = format_sql_answer_deterministic(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", "8.49"]],
+        "pt",
+        currency="EUR",
+    )
+    assert one == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "8.49" not in one
+
+    multi = format_sql_answer_deterministic(
+        ["name", "price"],
+        [["Água mineral 1,5 L", "0.45"], ["Arroz carolino 1 kg", "1.39"]],
+        "pt",
+        currency="EUR",
+    )
+    assert multi.splitlines()[0] == "Água mineral 1,5 L — 0,45 €"
+    assert "1,5 L" in multi
+    assert "0.45" not in multi
+
+
+def test_product_name_volume_is_not_treated_as_money():
+    text = format_sql_answer_deterministic(
+        ["name", "price"],
+        [["Água mineral 1.5 L", "0.45"]],
+        "pt",
+        currency="EUR",
+    )
+    assert text == "Água mineral 1.5 L — 0,45 €"
+    assert "1.5 L" in text
+
+
+def test_bare_dot_price_is_rejected_when_currency_formats_with_euro():
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", "8.49"]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=_reply("O Azeite Atlas Premium 750 ml tem o preço de 8.49"),
+    )
+    assert text == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "8.49" not in text
+
+
+def test_sql_prompt_does_not_suggest_contact_closers():
+    seen: list[str] = []
+
+    def fake(messages, *, temperature=0):
+        seen.append(messages[0]["content"])
+        return "O azeite custa 8,49 €."
+
+    present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=fake,
+    )
+    system = seen[0]
+    assert "Answer only what was asked" in system
+    assert "telemóvel" not in system
+    assert "contactar" not in system
+
+
+# --- codes keep their zeros, numbers from the runner, contact suggestions -----
+
+
+def test_codes_with_leading_zeros_stay_text():
+    rows = [["0010", "000000001", "0123"]]
+    text = format_sql_answer_deterministic(["sku", "nif", "postcode"], rows, "pt")
+    assert "0010" in text and "000000001" in text and "0123" in text
+
+
+def test_runner_decimal_strings_are_pt_money_and_names_are_untouched():
+    """The runner sends Decimal as "8.49"; a name like "Água 1.5 L" is never changed."""
+    rows = [["Água mineral 1.5 L", "8.49"], ["Leite 1 L", "0.89"]]
+    text = format_sql_answer_deterministic(["name", "price"], rows, "pt", currency="EUR")
+    assert text.splitlines() == ["Água mineral 1.5 L — 8,49 €", "Leite 1 L — 0,89 €"]
+    reply = "A Água mineral 1.5 L custa 8,49 € e o Leite 1 L custa 0,89 €."
+    assert (
+        present_sql_answer(
+            ["name", "price"],
+            rows,
+            "pt",
+            currency="EUR",
+            question="Preços?",
+            llm_complete=lambda messages, *, temperature=0: reply,
+        )
+        == reply
+    )
+    refused = present_sql_answer(
+        ["name", "price"],
+        rows,
+        "pt",
+        currency="EUR",
+        question="Preços?",
+        llm_complete=lambda messages, *, temperature=0: (
+            "A Água mineral 1.5 L custa 8.49 € e o Leite 1 L custa 0,89 €."
+        ),
+    )
+    assert refused == text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "O Azeite custa 8,49 €. Contacte-nos para mais informações.",
+        "O Azeite custa 8,49 €. Ligue-nos se tiver dúvidas.",
+        "O Azeite custa 8,49 €. Visite a nossa loja!",
+        "O Azeite custa 8,49 €. Envie-nos um e-mail.",
+        "Olive oil costs 8,49 €. Contact us for more.",
+    ],
+)
+def test_reply_cannot_add_a_contact_suggestion(reply):
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=lambda messages, *, temperature=0: reply,
+    )
+    assert text == "Azeite — 8,49 €"
+
+
+def test_contact_words_are_fine_when_the_rows_have_contact_data():
+    reply = "O telefone da Mercearia Atlas - Arroios é 210 000 000."
+    text = present_sql_answer(
+        ["name", "phone"],
+        [["Mercearia Atlas - Arroios", "210 000 000"]],
+        "pt",
+        question="Qual o telefone da loja?",
+        llm_complete=lambda messages, *, temperature=0: reply,
+    )
+    assert text == reply

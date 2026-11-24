@@ -6,6 +6,7 @@ and attempt counts are fine. SqlAnswer never carries SQL or DB error text.
 from __future__ import annotations
 
 import logging
+import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -88,7 +89,9 @@ def answer_with_sql(
             )
 
         try:
-            result = run_sql(validated, company_id=company_id, allowed=schema.allowed)
+            result = _run_sql_with_unaccent_fallback(
+                validated, company_id=company_id, allowed=schema.allowed
+            )
         except RunnerError as exc:
             last_reason = exc.reason
             if exc.reason == "db_error" and attempt < 2:
@@ -250,13 +253,37 @@ def _has_join(sql: str) -> bool:
     return tree is not None and any(True for _ in tree.find_all(exp.Join))
 
 
-def _relax_text_match(sql: str, question: str) -> str | None:
-    """Turn ``lower(col) = 'word'`` into ``col ILIKE '%word%'`` for typed words.
+def _unaccent_call(inner: exp.Expression) -> exp.Anonymous:
+    return exp.Anonymous(this="unaccent", expressions=[exp.Lower(this=inner)])
 
-    A shop question names part of a product (``azeite``); the stored name is longer.
-    Only WHERE filters whose literal the visitor typed change; ``%``, ``_`` and
-    backslash in the word are escaped so they match literally. Returns None when
-    there is nothing to relax. Never logs the SQL.
+
+def _is_unaccent_call(node: exp.Expression | None) -> bool:
+    return (
+        isinstance(node, exp.Anonymous)
+        and str(node.this).lower() == "unaccent"
+    )
+
+
+def _ilike_unaccent(column: exp.Column, pattern: str) -> exp.ILike:
+    """``unaccent(lower(col)) ILIKE unaccent(lower('%word%'))``."""
+    return exp.ILike(
+        this=_unaccent_call(column.copy()),
+        expression=_unaccent_call(exp.Literal.string(pattern)),
+    )
+
+
+def _escape_like_literal(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _relax_text_match(sql: str, question: str) -> str | None:
+    """Turn ``lower(col) = 'word'`` into accent-insensitive ILIKE for typed words.
+
+    A shop question names part of a product (``azeite``); the stored name is longer
+    and may use different accents (``Pão`` vs ``pao``). Only WHERE filters whose
+    literal the visitor typed change; ``%``, ``_`` and backslash in the word are
+    escaped so they match literally. Returns None when there is nothing to relax.
+    Never logs the SQL.
     """
     tree = _parse(sql)
     if tree is None:
@@ -265,44 +292,165 @@ def _relax_text_match(sql: str, question: str) -> str | None:
     for eq, column, text in _text_equalities(tree):
         if not _typed_by_visitor(text, question):
             continue
-        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        eq.replace(exp.ILike(this=column.copy(), expression=exp.Literal.string(f"%{escaped}%")))
+        escaped = _escape_like_literal(text)
+        eq.replace(_ilike_unaccent(column, f"%{escaped}%"))
         changed = True
     if not changed:
         return None
     return tree.sql(dialect="postgres")
 
 
-def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str, allowed) -> object:
-    """Re-run once with partial ILIKE when a typed text equality matched nothing."""
-    relaxed = _relax_text_match(sql, question)
-    if relaxed is None:
-        log.info("sqlqa/pipeline company=%s stage=relax_text skipped=1 rows=0", company_id)
-        return result
+def _ilike_pattern_text(node: exp.Expression) -> str | None:
+    """String pattern of an ILIKE right-hand side (literal or ``lower('…')``)."""
+    text = _string_literal(node)
+    if text is not None:
+        return text
+    if isinstance(node, exp.Literal) and node.is_string:
+        return node.this
+    return None
+
+
+def _ilike_column(node: exp.Expression) -> exp.Column | None:
+    """Column under ``col``, ``lower(col)``, or ``unaccent(lower(col))``."""
+    current: exp.Expression = node
+    if _is_unaccent_call(current) and current.expressions:
+        current = current.expressions[0]
+    if isinstance(current, exp.Lower):
+        current = current.this
+    return current if isinstance(current, exp.Column) else None
+
+
+def _unaccent_text_match(sql: str, question: str) -> str | None:
+    """Wrap plain ``col ILIKE '%word%'`` with ``unaccent(lower(...))`` for typed words."""
+    tree = _parse(sql)
+    if tree is None:
+        return None
+    changed = False
+    for ilike in tree.find_all(exp.ILike):
+        if not _in_where_filter(ilike):
+            continue
+        if _is_unaccent_call(ilike.this):
+            continue
+        pattern = _ilike_pattern_text(ilike.expression)
+        if pattern is None:
+            continue
+        core = pattern.strip("%")
+        if not core or not _typed_by_visitor(core, question):
+            continue
+        column = _ilike_column(ilike.this)
+        if column is None:
+            continue
+        ilike.replace(_ilike_unaccent(column, pattern))
+        changed = True
+    if not changed:
+        return None
+    return tree.sql(dialect="postgres")
+
+
+def _strip_unaccent_calls(sql: str) -> str | None:
+    """Remove ``unaccent(...)`` wrappers so the query can run without the extension."""
+    tree = _parse(sql)
+    if tree is None:
+        return None
+    changed = False
+    for func in list(tree.find_all(exp.Anonymous)):
+        if str(func.this).lower() != "unaccent" or len(func.expressions) != 1:
+            continue
+        func.replace(func.expressions[0].copy())
+        changed = True
+    if not changed:
+        return None
+    return tree.sql(dialect="postgres")
+
+
+# Companies whose client database has no ``unaccent`` (learned from a failed run
+# that worked once stripped). Their queries are stripped up front for a while, so
+# a question does not pay a failing database round trip on every query.
+_UNACCENT_MISSING_TTL_SECONDS = 600
+_unaccent_missing: dict[str, float] = {}
+
+
+def _unaccent_known_missing(company_id: str) -> bool:
+    until = _unaccent_missing.get(company_id)
+    if until is None:
+        return False
+    if until < time.monotonic():
+        _unaccent_missing.pop(company_id, None)
+        return False
+    return True
+
+
+def _run_sql_with_unaccent_fallback(sql: str, *, company_id: str, allowed):
+    """Run SQL; if ``unaccent`` is missing, strip it once and retry."""
+    if _unaccent_known_missing(company_id):
+        stripped = _strip_unaccent_calls(sql)
+        if stripped is not None:
+            return run_sql(validate_sql(stripped, allowed), company_id=company_id, allowed=allowed)
     try:
-        relaxed_sql = validate_sql(relaxed, allowed)
-    except SQLRejected as exc:
-        log.info(
-            "sqlqa/pipeline company=%s stage=relax_text validation=fail reason=%s",
-            company_id,
-            exc.reason,
-        )
-        return result
-    try:
-        relaxed_result = run_sql(relaxed_sql, company_id=company_id, allowed=allowed)
+        return run_sql(sql, company_id=company_id, allowed=allowed)
     except RunnerError as exc:
+        if exc.reason != "db_error":
+            raise
+        stripped = _strip_unaccent_calls(sql)
+        if stripped is None:
+            raise
+        try:
+            validated = validate_sql(stripped, allowed)
+        except SQLRejected:
+            raise exc from None
+        try:
+            result = run_sql(validated, company_id=company_id, allowed=allowed)
+        except RunnerError:
+            raise exc from None
+        _unaccent_missing[company_id] = time.monotonic() + _UNACCENT_MISSING_TTL_SECONDS
         log.info(
-            "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=0 reason=%s",
+            "sqlqa/pipeline company=%s stage=unaccent_fallback status=ok",
             company_id,
-            exc.reason,
         )
         return result
-    log.info(
-        "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=%s",
-        company_id,
-        relaxed_result.row_count,
+
+
+def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str, allowed) -> object:
+    """Re-run once with partial / accent-insensitive ILIKE when a text filter matched nothing."""
+    candidates = (
+        _relax_text_match(sql, question),
+        _unaccent_text_match(sql, question),
     )
-    return relaxed_result if relaxed_result.row_count > 0 else result
+    tried = False
+    for relaxed in candidates:
+        if relaxed is None:
+            continue
+        tried = True
+        try:
+            relaxed_sql = validate_sql(relaxed, allowed)
+        except SQLRejected as exc:
+            log.info(
+                "sqlqa/pipeline company=%s stage=relax_text validation=fail reason=%s",
+                company_id,
+                exc.reason,
+            )
+            continue
+        try:
+            relaxed_result = _run_sql_with_unaccent_fallback(
+                relaxed_sql, company_id=company_id, allowed=allowed
+            )
+        except RunnerError as exc:
+            log.info(
+                "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=0 reason=%s",
+                company_id,
+                exc.reason,
+            )
+            continue
+        log.info(
+            "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=%s",
+            company_id,
+            relaxed_result.row_count,
+        )
+        if relaxed_result.row_count > 0:
+            return relaxed_result
+    if not tried:
+        log.info("sqlqa/pipeline company=%s stage=relax_text skipped=1 rows=0", company_id)
+    return result
 
 
 def _finish(company_id: str, answer: SqlAnswer) -> SqlAnswer:

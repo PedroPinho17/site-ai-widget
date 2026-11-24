@@ -168,6 +168,16 @@ def test_plain_operators_still_pass():
     assert validate_sql("SELECT name FROM products WHERE name = 'x'", ALLOWED)
 
 
+def test_unaccent_ilike_is_allowed():
+    sql = (
+        "SELECT p.name FROM products AS p "
+        "WHERE unaccent(lower(p.name)) ILIKE unaccent(lower('%pao%')) LIMIT 10"
+    )
+    out = validate_sql(sql, ALLOWED)
+    assert "unaccent" in out.lower()
+    assert "ILIKE" in out.upper()
+
+
 @pytest.mark.parametrize(
     "sql",
     [

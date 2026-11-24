@@ -7,7 +7,13 @@ import pytest
 
 from site_ai_widget.sqlqa import pipeline
 from site_ai_widget.sqlqa.generator import RETRY_HINTS, retry_hint
-from site_ai_widget.sqlqa.pipeline import SqlAnswer, _relax_text_match, answer_with_sql
+from site_ai_widget.sqlqa.pipeline import (
+    SqlAnswer,
+    _relax_text_match,
+    _strip_unaccent_calls,
+    _unaccent_text_match,
+    answer_with_sql,
+)
 from site_ai_widget.sqlqa.retrieval import ColumnInfo, SchemaSlice, TableInfo
 from site_ai_widget.sqlqa.runner import RunnerError, RunResult
 from site_ai_widget.sqlqa.validator import SQLRejected
@@ -57,6 +63,8 @@ def _result(rows=None) -> RunResult:
 @pytest.fixture(autouse=True)
 def _slice(monkeypatch):
     monkeypatch.setattr(pipeline, "retrieve_schema", lambda *a, **k: PRODUCTS)
+    # The "unaccent missing" memo is process-wide: never leak it between tests.
+    monkeypatch.setattr(pipeline, "_unaccent_missing", {})
 
 
 def test_success_on_first_try(monkeypatch):
@@ -324,7 +332,10 @@ def test_relax_text_match_escapes_like_wildcards():
         "tem azeite 100%_bio?",
     )
     pattern = "'%100" + BS + "%" + BS + "_bio%'"
-    assert relaxed == f"SELECT p.name FROM products AS p WHERE p.name ILIKE {pattern} LIMIT 5"
+    assert relaxed == (
+        "SELECT p.name FROM products AS p WHERE UNACCENT(LOWER(p.name)) "
+        f"ILIKE UNACCENT(LOWER({pattern})) LIMIT 5"
+    )
 
 
 def test_numeric_equality_is_not_relaxed(monkeypatch):
@@ -392,7 +403,8 @@ def test_only_the_visitors_word_is_widened_not_other_filters():
     )
     assert relaxed == (
         "SELECT p.name FROM products AS p "
-        "WHERE p.status = 'published' AND p.name ILIKE '%azeite%' LIMIT 10"
+        "WHERE p.status = 'published' AND UNACCENT(LOWER(p.name)) "
+        "ILIKE UNACCENT(LOWER('%azeite%')) LIMIT 10"
     )
 
 
@@ -434,7 +446,10 @@ def test_accents_and_case_still_count_as_typed():
         "SELECT p.name FROM products AS p WHERE lower(p.name) = 'pao' LIMIT 10",
         "Têm PÃO de milho?",
     )
-    assert relaxed == "SELECT p.name FROM products AS p WHERE p.name ILIKE '%pao%' LIMIT 10"
+    assert relaxed == (
+        "SELECT p.name FROM products AS p WHERE UNACCENT(LOWER(p.name)) "
+        "ILIKE UNACCENT(LOWER('%pao%')) LIMIT 10"
+    )
 
 
 def test_quote_in_the_word_stays_inside_the_literal():
@@ -442,7 +457,10 @@ def test_quote_in_the_word_stays_inside_the_literal():
         "SELECT p.name FROM products AS p WHERE p.name = 'o''neil' LIMIT 10",
         "têm o'neil?",
     )
-    assert relaxed == "SELECT p.name FROM products AS p WHERE p.name ILIKE '%o''neil%' LIMIT 10"
+    assert relaxed == (
+        "SELECT p.name FROM products AS p WHERE UNACCENT(LOWER(p.name)) "
+        "ILIKE UNACCENT(LOWER('%o''neil%')) LIMIT 10"
+    )
 
 
 def test_relaxed_query_goes_through_the_real_validator(monkeypatch):
@@ -545,7 +563,8 @@ def test_empty_join_retries_once_with_simpler_hint(monkeypatch):
     assert out.row_count == 1
     assert out.rows == [["Pão de milho", 18]]
     assert previous[1] == retry_hint("no_rows")
-    assert runs["n"] == 2
+    # original empty + unaccent wrap retry + LLM rewrite with AND patterns
+    assert runs["n"] == 3
 
 
 def test_no_rows_retry_runs_at_most_once(monkeypatch):
@@ -610,3 +629,102 @@ def test_failed_stock_query_is_an_error_not_an_empty_result(monkeypatch):
     assert out.status == "error"
     assert out.rows == []
     assert out.attempts == 2
+
+
+def test_plain_ilike_is_wrapped_with_unaccent_for_typed_words():
+    wrapped = _unaccent_text_match(
+        "SELECT p.name, s.quantity FROM products AS p "
+        "JOIN stock AS s ON s.product_id = p.id "
+        "WHERE p.name ILIKE '%pao%' AND p.name ILIKE '%milho%' LIMIT 10",
+        "Têm pão de milho em stock?",
+    )
+    assert wrapped is not None
+    assert "UNACCENT(LOWER(p.name))" in wrapped
+    assert "UNACCENT(LOWER('%pao%'))" in wrapped
+    assert "UNACCENT(LOWER('%milho%'))" in wrapped
+    assert "s.product_id = p.id" in wrapped
+
+
+def test_strip_unaccent_leaves_lower_ilike():
+    stripped = _strip_unaccent_calls(
+        "SELECT p.name FROM products AS p WHERE UNACCENT(LOWER(p.name)) "
+        "ILIKE UNACCENT(LOWER('%pao%')) LIMIT 10"
+    )
+    assert stripped == (
+        "SELECT p.name FROM products AS p WHERE LOWER(p.name) ILIKE LOWER('%pao%') LIMIT 10"
+    )
+
+
+def test_unaccent_missing_falls_back_once(monkeypatch):
+    sql = (
+        "SELECT p.name, s.quantity FROM products AS p "
+        "JOIN stock AS s ON s.product_id = p.id "
+        "WHERE UNACCENT(LOWER(p.name)) ILIKE UNACCENT(LOWER('%pao%')) "
+        "AND UNACCENT(LOWER(p.name)) ILIKE UNACCENT(LOWER('%milho%')) LIMIT 10"
+    )
+    ran: list[str] = []
+
+    def run(query, **kwargs):
+        ran.append(query)
+        if "UNACCENT" in query.upper():
+            raise RunnerError("db_error")
+        return RunResult(
+            columns=["name", "quantity"],
+            rows=[["Pão de milho", 18]],
+            row_count=1,
+            truncated=False,
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: sql)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda query, allowed: query)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Têm pão de milho em stock?")
+    assert out.status == "ok"
+    assert out.rows == [["Pão de milho", 18]]
+    assert len(ran) == 2
+    assert "UNACCENT" in ran[0].upper()
+    assert "UNACCENT" not in ran[1].upper()
+    assert "product_id" in ran[1]
+
+
+def test_missing_unaccent_is_remembered_so_later_queries_skip_the_failing_run(monkeypatch):
+    sql = (
+        "SELECT p.name FROM products AS p "
+        "WHERE unaccent(lower(p.name)) ILIKE unaccent(lower('%pao%')) LIMIT 10"
+    )
+    ran: list[str] = []
+
+    def run(sql_text, **kwargs):
+        ran.append(sql_text)
+        if "unaccent" in sql_text.lower():
+            raise RunnerError("db_error")
+        return RunResult(columns=["name"], rows=[["Pão de milho"]], row_count=1, truncated=False, elapsed_ms=1)
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: sql)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda s, allowed: s)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    first = answer_with_sql(COMPANY, "Têm pao de milho?")
+    assert first.rows == [["Pão de milho"]]
+    assert [("unaccent" in s.lower()) for s in ran] == [True, False]
+
+    ran.clear()
+    second = answer_with_sql(COMPANY, "Têm pao de milho?")
+    assert second.rows == [["Pão de milho"]]
+    # Known missing: stripped up front, no failing round trip.
+    assert [("unaccent" in s.lower()) for s in ran] == [False]
+
+
+def test_unaccent_rewrite_keeps_quotes_escaped_and_passes_the_real_validator():
+    from site_ai_widget.sqlqa.pipeline import _unaccent_text_match
+    from site_ai_widget.sqlqa.validator import validate_sql as real_validate
+
+    sql = "SELECT p.name FROM products AS p WHERE p.name ILIKE '%pão d''oro%' LIMIT 10"
+    rewritten = _unaccent_text_match(sql, "têm pão d'oro?")
+    assert rewritten is not None
+    assert "unaccent(lower('%pão d''oro%'))" in rewritten.lower()
+    validated = real_validate(rewritten, ALLOWED)
+    assert "LIMIT 10" in validated.upper()
+    assert "INSERT" not in validated.upper()

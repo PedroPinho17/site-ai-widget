@@ -109,7 +109,7 @@ def answer_question(
         rows = sql_answer.rows[:_MAX_SQL_ROWS]
         columns = list(sql_answer.columns)
         truncated = bool(sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS)
-        currency = _company_currency(company_id) if present_fn is present_sql_answer else None
+        currency = _company_currency(company_id)
         log.info(
             "ask/sql stage=present rows=%s lang=%s currency=%s",
             len(rows),

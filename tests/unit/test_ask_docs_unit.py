@@ -155,7 +155,8 @@ def test_ask_documents_matched_false_when_search_finds_nothing(monkeypatch):
 @pytest.mark.parametrize(
     ("answer", "expected_pages"),
     [
-        ("Abre ao domingo das 10 as 14.", []),
+        # No [n]: still one chip from the retrieved chunk (document answers always cite).
+        ("Abre ao domingo das 10 as 14.", [2]),
         ("Abre ao domingo das 10 as 14 [1].", [2]),
     ],
     ids=["no_marker", "with_marker"],

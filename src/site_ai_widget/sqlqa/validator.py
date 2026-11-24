@@ -108,6 +108,8 @@ ALLOWED_ANONYMOUS: frozenset[str] = frozenset(
         "to_char",
         "to_date",
         "to_timestamp",
+        # Accent-insensitive text match (demo clientdb enables the extension).
+        "unaccent",
     }
 )
 

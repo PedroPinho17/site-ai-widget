@@ -23,7 +23,22 @@ def test_system_asks_for_european_portuguese():
     system = build_messages("Onde?", [_chunk()])[0]["content"]
     assert "European Portuguese" in system or "Portugal" in system
     assert "você" in system.lower()
-    assert "telemóvel" in system
+    assert "Answer only what was asked" in system
+    assert "telemóvel" not in system
+    assert "contactar" not in system
+
+
+def test_map_citations_falls_back_when_answer_omits_markers():
+    chunks = [
+        {"n": 1, "document_id": "aaa", "document_name": "politica.pdf", "page": 2, "content": "x"},
+        {"n": 2, "document_id": "aaa", "document_name": "politica.pdf", "page": 3, "content": "y"},
+        {"n": 3, "document_id": "bbb", "document_name": "faq.pdf", "page": 1, "content": "z"},
+    ]
+    cites = map_citations("Pode devolver em 14 dias.", chunks)
+    assert cites == [
+        {"document_id": "aaa", "document_name": "politica.pdf", "page": 2},
+        {"document_id": "bbb", "document_name": "faq.pdf", "page": 1},
+    ]
 
 
 def test_excerpts_delimited_and_untrusted():
