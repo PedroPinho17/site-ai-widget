@@ -696,3 +696,67 @@ def test_widget_does_not_go_through_the_ask_route_module(client, monkeypatch):
     response = _ask(client, key)
     assert response.status_code == 200
     assert response.json()["mode"] == "sql"
+
+
+def test_lookup_is_rate_limited_before_the_database(client, monkeypatch):
+    """Random keys cannot each cost a database lookup without limit."""
+    from site_ai_widget.api import widget_cors
+
+    seen: list[str] = []
+    real = widget_cors.authorize_widget
+
+    def spy(key, origin):
+        seen.append(key)
+        return real(key, origin)
+
+    monkeypatch.setattr(widget_cors, "authorize_widget", spy)
+    _tighten(monkeypatch, WIDGET_LOOKUP_RATE_LIMIT="2")
+    first = _ask(client, "wk_unknown_example_key_0001")
+    second = client.options(
+        "/v1/widget/wk_unknown_example_key_0002/ask",
+        headers={"Origin": ORIGIN, "Access-Control-Request-Method": "POST"},
+    )
+    assert first.status_code == second.status_code == 401
+    blocked = _ask(client, "wk_unknown_example_key_0003")
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "rate_limited"
+    assert "Retry-After" in blocked.headers
+    assert "origin" in blocked.headers["vary"].lower()
+    _assert_no_cors(blocked)
+    assert seen == ["wk_unknown_example_key_0001", "wk_unknown_example_key_0002"]
+
+
+def test_lookup_bucket_is_separate_from_the_api_bucket(client, monkeypatch):
+    token, _company = _register(client)
+    key = _make_key(client, token)["public_key"]
+    session = _ask(client, key, question="hist").json()["session_token"]
+    _tighten(monkeypatch, API_RATE_LIMIT="1", WIDGET_LOOKUP_RATE_LIMIT="1000")
+    for _ in range(5):
+        assert _ask(client, key, origin="https://evil.example").status_code == 403
+    assert _history(client, key, session).status_code == 200
+
+
+def test_denied_request_is_refused_before_the_body_is_parsed(client, monkeypatch):
+    """A foreign origin gets 403 even when the body is invalid: no route work runs."""
+    calls = _block_ask_service(monkeypatch)
+    token, _company = _register(client)
+    key = _make_key(client, token)["public_key"]
+    bad_body = _ask(client, key, origin="https://evil.example", question="hi", company_id="nope")
+    assert bad_body.status_code == 403
+    assert bad_body.json()["detail"]["code"] == "origin_not_allowed"
+    _assert_no_cors(bad_body)
+    not_json = client.post(
+        f"/v1/widget/{key}/ask",
+        headers={"Origin": "https://evil.example", "Content-Type": "application/json"},
+        content=b"{not json",
+    )
+    assert not_json.status_code == 403
+    unknown = client.post(
+        "/v1/widget/wk_unknown_example_key_0001/history",
+        headers={"Origin": ORIGIN},
+        json={"session_token": ""},
+    )
+    assert unknown.status_code == 401
+    assert unknown.json()["detail"]["code"] == "widget_key_invalid"
+    _assert_no_cors(unknown)
+    assert calls == []

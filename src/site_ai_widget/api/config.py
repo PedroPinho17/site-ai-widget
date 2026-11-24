@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # Per public widget key. At least 3, same floor as the ask bucket.
     widget_key_rate_limit: int = Field(default=60, ge=3)
     widget_key_rate_limit_window: int = Field(default=60, ge=1)
+    # Per IP, every /v1/widget/* request (preflight included), charged before the
+    # key/origin database lookup so random keys cannot tie up the pool.
+    widget_lookup_rate_limit: int = Field(default=300, ge=1)
+    widget_lookup_rate_limit_window: int = Field(default=60, ge=1)
     # Seed (and similar tooling) only resets "processing" rows older than this,
     # so a live API worker is not interrupted mid-job.
     document_stuck_processing_seconds: int = Field(default=180, ge=30, le=86_400)

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from site_ai_widget.api.auth import hash_password
 from site_ai_widget.api.config import get_settings
+from site_ai_widget.api.schemas import normalize_origin
 from site_ai_widget.db.pool import close_pool, connection
 from site_ai_widget.docs.process import process_document
 from site_ai_widget.docs.storage import new_storage_name, storage_path, upload_root
@@ -22,6 +23,12 @@ log = logging.getLogger("site_ai_widget")
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO_DIR = ROOT / "demo"
+
+# Public embed id for examples/demo-site.html. Not a password: the browser ships
+# it, and the API only answers when Origin is on the allowlist.
+DEMO_WIDGET_SLUG = "mercearia-atlas"
+DEMO_WIDGET_KEY = "wk_demo_mercearia_atlas"
+DEMO_WIDGET_ORIGIN = "http://127.0.0.1:5500"
 
 DEMOS = (
     {
@@ -197,6 +204,41 @@ def _seed_pdf(company_id, admin_id, demo: dict, database_url: str | None = None)
     return status
 
 
+def ensure_demo_widget_key(conn, company_id) -> None:
+    """Allow the local demo page to call the Mercearia Atlas widget.
+
+    Adds ``DEMO_WIDGET_ORIGIN`` when it is missing and leaves every other
+    allowlisted origin in place. The key stays active so the demo page works
+    after a re-seed. The raw value is a public embed id, not a credential.
+    """
+    origin = normalize_origin(DEMO_WIDGET_ORIGIN)
+    row = conn.execute(
+        "SELECT allowed_origins FROM widget_keys WHERE public_key = %s",
+        (DEMO_WIDGET_KEY,),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO widget_keys (company_id, public_key, allowed_origins, is_active)
+            VALUES (%s, %s, %s, true)
+            """,
+            (str(company_id), DEMO_WIDGET_KEY, [origin]),
+        )
+    else:
+        origins = list(row[0] or [])
+        if origin not in origins:
+            origins.append(origin)
+        conn.execute(
+            """
+            UPDATE widget_keys
+            SET company_id = %s, allowed_origins = %s, is_active = true
+            WHERE public_key = %s
+            """,
+            (str(company_id), origins, DEMO_WIDGET_KEY),
+        )
+    log.info("Allowlisted demo widget origin for %s", DEMO_WIDGET_SLUG)
+
+
 def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> list[str]:
     created: list[str] = []
     for demo in demos:
@@ -253,6 +295,8 @@ def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> li
                 (str(company_id),),
             ).fetchone()
             admin_id = admin[0] if admin else None
+            if demo["slug"] == DEMO_WIDGET_SLUG:
+                ensure_demo_widget_key(conn, company_id)
         # Company transaction is committed here; the PDF gets its own.
         _seed_pdf(company_id, admin_id, demo, database_url)
     return created

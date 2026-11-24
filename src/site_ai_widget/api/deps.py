@@ -16,18 +16,23 @@ auth_limiter: RateLimiter | None = None
 api_limiter: RateLimiter | None = None
 ask_limiter: RateLimiter | None = None
 widget_key_limiter: RateLimiter | None = None
+widget_lookup_limiter: RateLimiter | None = None
 _widget_charge_lock = Lock()
 
 
 def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
     global _settings, auth_limiter, api_limiter, ask_limiter, widget_key_limiter
+    global widget_lookup_limiter
     settings = get_settings()
     if (
         auth_limiter is None
         or api_limiter is None
         or ask_limiter is None
         or widget_key_limiter is None
+        or widget_lookup_limiter is None
         or _settings is None
+        or _settings.widget_lookup_rate_limit != settings.widget_lookup_rate_limit
+        or _settings.widget_lookup_rate_limit_window != settings.widget_lookup_rate_limit_window
         or _settings.auth_rate_limit != settings.auth_rate_limit
         or _settings.api_rate_limit != settings.api_rate_limit
         or _settings.ask_rate_limit != settings.ask_rate_limit
@@ -41,6 +46,9 @@ def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
         widget_key_limiter = RateLimiter(
             settings.widget_key_rate_limit, settings.widget_key_rate_limit_window
         )
+        widget_lookup_limiter = RateLimiter(
+            settings.widget_lookup_rate_limit, settings.widget_lookup_rate_limit_window
+        )
         _settings = settings
     return auth_limiter, api_limiter, ask_limiter
 
@@ -48,10 +56,12 @@ def _ensure_limiters() -> tuple[RateLimiter, RateLimiter, RateLimiter]:
 def reset_limiters() -> None:
     """Clear in-memory counters (tests)."""
     global auth_limiter, api_limiter, ask_limiter, widget_key_limiter, _settings
+    global widget_lookup_limiter
     auth_limiter = None
     api_limiter = None
     ask_limiter = None
     widget_key_limiter = None
+    widget_lookup_limiter = None
     _settings = None
     from site_ai_widget.api.routes.db_connection import reset_db_connection_limiters
 
@@ -117,6 +127,21 @@ def charge_widget_ask(request: Request, key_id: str) -> str:
             per_key.check(wk, n=1)
         ask.check(ip_key, n=3)
         per_key.check(wk, n=1)
+    return ip
+
+
+def charge_widget_lookup(request: Request) -> str:
+    """One slot per /v1/widget/* request, taken before the key/origin lookup.
+
+    A separate bucket from ``api:``, so a foreign page cannot spend a visitor's
+    general API budget, but random keys still cannot flood the database.
+    """
+    _ensure_limiters()
+    limiter = widget_lookup_limiter
+    if limiter is None:
+        raise RuntimeError("widget lookup limiter was not initialised")
+    ip = resolve_client_ip(request)
+    limiter.check(f"widget-lookup:{ip}")
     return ip
 
 

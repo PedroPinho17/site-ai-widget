@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mercearia Atlas</title>
+  <style>
+    body { margin: 0; font-family: Georgia, serif; background: #fff7ed; color: #431407; }
+    header, main { max-width: 720px; margin: 0 auto; padding: 24px 20px; }
+    header { background: #9a3412; color: #fff7ed; max-width: none; }
+    header div { max-width: 720px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    button { background: #b91c1c; color: #fff; border: 0; padding: 8px 12px; font-family: Georgia, serif; }
+    .note { background: #ffedd5; border: 1px solid #fdba74; padding: 12px 14px; }
+    code { font-family: Consolas, monospace; font-size: 0.92em; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Mercearia Atlas</h1>
+      <p>Mercearia de bairro, fictícia, na Rua das Flores 12, Lisboa.</p>
+    </div>
+  </header>
+  <main>
+    <p class="note">
+      Página de demonstração com dados fictícios. Na pasta <code>examples</code>,
+      execute <code>python -m http.server 5500</code> e abra
+      <code>http://127.0.0.1:5500/demo-site.html</code>.
+      A API tem de estar em <code>http://127.0.0.1:8002</code>.
+      O seed da Mercearia Atlas acrescenta esta origem à chave pública de demonstração.
+    </p>
+    <h2>Esta semana</h2>
+    <ul>
+      <li>Azeite da serra, lata de 500 ml</li>
+      <li>Queijo de ovelha curado</li>
+      <li>Pão de milho, fornada da manhã</li>
+    </ul>
+    <p>Aberto de terça a sábado, 9h–19h. Telefone fictício: 210 000 000.</p>
+    <p><button type="button">Ver ementa da semana</button></p>
+  </main>
+  <script
+    src="http://127.0.0.1:8002/embed.js"
+    data-key="wk_demo_mercearia_atlas"
+    data-lang="pt"
+    async
+  ></script>
+</body>
+</html>

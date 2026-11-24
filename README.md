@@ -174,6 +174,10 @@ CORS is only on `/v1/widget/*` (never a global `*`, never credentials).
   hard cap 1000).
 - Each call takes **3** slots in the per-IP ask bucket and **1** slot in
   `WIDGET_KEY_RATE_LIMIT` (default **60 per minute**, minimum 3).
+- Every `/v1/widget/*` request, preflight included, first takes one slot in a
+  per-IP lookup bucket, `WIDGET_LOOKUP_RATE_LIMIT` (default **300 per minute**),
+  before the key is looked up. A denied key or origin is answered before the
+  body is read.
 - A null, unknown, expired (24h idle) or other-company `session_token` starts a
   new visitor session. The raw token is returned once; only its SHA-256 hash is
   stored. Sessions are not shared across companies.
@@ -190,6 +194,34 @@ A preflight (`OPTIONS`) from an allowlisted origin gets
 `Access-Control-Allow-Origin` set to that request's `Origin`, `Vary: Origin`,
 `POST`, `Content-Type` and `Access-Control-Max-Age: 600`. Any other origin gets
 no CORS headers. Every `/v1/widget/*` response carries `Vary: Origin`.
+
+### Embed the widget
+
+The API serves the script at `GET /embed.js` (`application/javascript;
+charset=utf-8`, `X-Content-Type-Options: nosniff`,
+`Cross-Origin-Resource-Policy: cross-origin`, cached for 5 minutes). It reads `data-key` and `data-lang` (`pt` or `en`; if
+omitted, Portuguese or English from `navigator.language`, otherwise English)
+and calls the same origin that served the file.
+
+```html
+<script src="http://127.0.0.1:8002/embed.js" data-key="wk_…" data-lang="pt" async></script>
+```
+
+`examples/demo-site.html` is a fictional shop page. It uses the public seed key
+`wk_demo_mercearia_atlas` (an embed id, not a password). Seeding Mercearia
+Atlas puts `http://127.0.0.1:5500` on that key's allowlist. With the API on
+port 8002:
+
+```bash
+cd examples
+python -m http.server 5500
+```
+
+Open `http://127.0.0.1:5500/demo-site.html`.
+
+To allow another site, `PATCH /widget-keys/{id}` with the full
+`allowed_origins` list. Each entry is a canonical origin (`http://127.0.0.1:5500`,
+no path and no trailing slash). An empty list allows no origin.
 
 Request bodies are capped before parsing: `POST /documents` at
 `MAX_UPLOAD_MB` + 1 MiB, every other route at 1 MiB (**413** `upload_too_large`).
@@ -239,6 +271,7 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | DELETE | `/documents/{id}` | admin; removes file + chunks |
 | POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |
 | POST | `/ask/docs` | hybrid RAG answer + citations (docs only) |
+| GET | `/embed.js` | widget script (`application/javascript`) |
 | POST | `/v1/widget/{key}/ask` | public; origin allowlist; returns `session_token` |
 | POST | `/v1/widget/{key}/history` | public; last 50 messages for that session |
 

@@ -18,6 +18,7 @@ from site_ai_widget.api.routes import (
     company,
     db_connection,
     documents,
+    embed_script,
     health,
     widget,
     widget_keys,
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(embed_script.router)
     app.include_router(auth_routes.router)
     app.include_router(company.router)
     app.include_router(widget_keys.router)

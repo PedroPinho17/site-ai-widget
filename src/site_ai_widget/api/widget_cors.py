@@ -3,8 +3,10 @@
 Reflects the request Origin when that origin is allowlisted for the key's
 company. Never ``*``, never credentials, and no global CORS middleware.
 
-The key/origin check reads the database with a blocking driver, so it runs in
-the thread pool — never on the event loop. Every widget response carries
+Each request first takes a slot in a per-IP lookup bucket, then the key/origin
+check reads the database with a blocking driver in the thread pool — never on
+the event loop. A denied request is answered here: the body is not read and the
+route does not run. Every widget response carries
 ``Vary: Origin`` (allowed or not) so a shared cache never serves one origin's
 answer to another.
 """
@@ -14,7 +16,9 @@ import json
 import re
 
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 
+from site_ai_widget.api.deps import charge_widget_lookup
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.widget.access import authorize_widget
 
@@ -39,6 +43,13 @@ def _cors(origin: bytes) -> list[tuple[bytes, bytes]]:
         (b"access-control-allow-headers", b"Content-Type"),
         (b"access-control-max-age", b"600"),
     ]
+
+
+def _error_headers(exc: ApiError) -> list[tuple[bytes, bytes]]:
+    headers = [_VARY]
+    for name, value in (exc.headers or {}).items():
+        headers.append((name.lower().encode("latin-1"), str(value).encode("latin-1")))
+    return headers
 
 
 def _error_body(exc: ApiError) -> bytes:
@@ -72,6 +83,12 @@ class WidgetCorsMiddleware:
         key = match.group(1)
         origin_bytes = _header_bytes(scope, b"origin")
         origin_text = origin_bytes.decode("latin-1") if origin_bytes is not None else None
+        try:
+            charge_widget_lookup(Request(scope))
+        except ApiError as exc:
+            await _send(send, exc.status, _error_headers(exc), _error_body(exc))
+            return
+
         denial: ApiError | None
         try:
             await run_in_threadpool(authorize_widget, key, origin_text)
@@ -90,8 +107,12 @@ class WidgetCorsMiddleware:
                 await _send(send, missing.status, [_VARY], _error_body(missing))
             return
 
-        allowed = denial is None and origin_bytes is not None
-        cors = _cors(origin_bytes) if allowed else [_VARY]
+        if denial is not None or origin_bytes is None:
+            refused = denial or ApiError("origin_not_allowed", 403)
+            await _send(send, refused.status, [_VARY], _error_body(refused))
+            return
+
+        cors = _cors(origin_bytes)
 
         async def send_cors(message):
             if message["type"] == "http.response.start":
