@@ -1,6 +1,7 @@
 """SQL result → visitor-facing answer (deterministic + LLM fallback)."""
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 import pytest
@@ -108,6 +109,38 @@ def test_one_row_llm_failure_falls_back_pt_and_en():
         )
         == "price: 8.49"
     )
+
+
+def test_one_row_validation_failure_uses_labeled_fallback_not_not_found():
+    """A rejected LLM reply must stay on the row fallback, never the empty-result line."""
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite da serra, lata de 500 ml", Decimal("8.49")]],
+        "pt",
+        question="Qual o preço do azeite?",
+        llm_complete=lambda messages, *, temperature=0: "Não encontrei essa informação.",
+    )
+    assert text == "Azeite da serra, lata de 500 ml: 8,49"
+    assert "Não encontrei" not in text
+
+
+def test_one_row_llm_error_uses_labeled_fallback(caplog):
+    def boom(messages, *, temperature=0):
+        raise RuntimeError("provider down")
+
+    with caplog.at_level(logging.INFO, logger="site_ai_widget"):
+        text = present_sql_answer(
+            ["name", "price"],
+            [["Azeite da serra, lata de 500 ml", Decimal("8.49")]],
+            "pt",
+            question="Qual o preço do azeite?",
+            llm_complete=boom,
+        )
+    assert text == "Azeite da serra, lata de 500 ml: 8,49"
+    assert "stage=fallback" in caplog.text
+    assert "reason=llm_error" in caplog.text
+    assert "8,49" not in caplog.text
+    assert "Azeite" not in caplog.text
 
 
 def test_one_row_llm_invented_number_falls_back():

@@ -84,6 +84,17 @@ def answer_question(
     except Exception as exc:
         log.warning("ask/sql failed: %s", type(exc).__name__)
 
+    if sql_answer is None:
+        log.info("ask/sql stage=skip reason=error")
+    elif sql_answer.status != "ok":
+        log.info(
+            "ask/sql stage=skip status=%s rows=%s",
+            sql_answer.status,
+            sql_answer.row_count,
+        )
+    else:
+        log.info("ask/sql stage=present rows=%s", len(sql_answer.rows))
+
     if sql_answer is not None and sql_answer.status == "ok":
         rows = sql_answer.rows[:_MAX_SQL_ROWS]
         columns = list(sql_answer.columns)
@@ -97,7 +108,7 @@ def answer_question(
                 question=question,
             )
         except Exception as exc:
-            log.warning("ask/sql present failed: %s", type(exc).__name__)
+            log.info("ask/sql stage=fallback reason=present_error error=%s", type(exc).__name__)
             answer = format_sql_answer_deterministic(columns, rows, lang, truncated=truncated)
         return AskResponse(
             mode="sql",

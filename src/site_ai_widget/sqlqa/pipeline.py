@@ -6,9 +6,13 @@ and attempt counts are fine. SqlAnswer never carries SQL or DB error text.
 from __future__ import annotations
 
 import logging
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
+
+import sqlglot
+from sqlglot import exp
 
 from site_ai_widget.llm.client import complete_chat
 from site_ai_widget.sqlqa.generator import generate_sql, retry_hint
@@ -96,6 +100,22 @@ def answer_with_sql(
                 SqlAnswer(status=status, reason=exc.reason, attempts=attempts),
             )
 
+        if result.row_count == 0:
+            result = _relax_empty_text_match(
+                validated,
+                result,
+                question=question,
+                company_id=company_id,
+                allowed=schema.allowed,
+            )
+        if result.row_count == 0 and attempt < 2 and _has_text_equality(validated):
+            # Only a text filter can be "too exact"; a numeric or date filter that
+            # matched nothing is a real empty result and is not sent back to the LLM.
+            # Exact text equality (lower(name) = 'azeite') misses longer product names.
+            log.info("sqlqa/pipeline company=%s stage=no_rows attempts=%s", company_id, attempts)
+            previous_error = retry_hint("no_rows")
+            continue
+
         return _finish(
             company_id,
             SqlAnswer(
@@ -115,12 +135,142 @@ def answer_with_sql(
     )
 
 
+def _string_literal(node: exp.Expression) -> str | None:
+    if isinstance(node, exp.Literal) and node.is_string:
+        return node.this
+    if isinstance(node, exp.Lower) and isinstance(node.this, exp.Literal) and node.this.is_string:
+        return node.this.this
+    return None
+
+
+def _in_where_filter(node: exp.Expression) -> bool:
+    """True when ``node`` is a plain WHERE filter: only AND / OR / ( ) up to WHERE.
+
+    An equality under NOT, CASE, a function, JOIN ... ON, HAVING or the select list
+    is left alone: relaxing it would change which rows are excluded or what a
+    column returns.
+    """
+    parent = node.parent
+    while parent is not None:
+        if isinstance(parent, exp.Where):
+            return True
+        if not isinstance(parent, (exp.And, exp.Or, exp.Paren)):
+            return False
+        parent = parent.parent
+    return False
+
+
+def _text_equalities(tree: exp.Expression) -> list[tuple[exp.EQ, exp.Column, str]]:
+    """``column = 'text'`` / ``lower(column) = 'text'`` filters in WHERE clauses."""
+    found: list[tuple[exp.EQ, exp.Column, str]] = []
+    for eq in tree.find_all(exp.EQ):
+        if not _in_where_filter(eq):
+            continue
+        left, right = eq.this, eq.expression
+        text = _string_literal(left)
+        other: exp.Expression = right
+        if text is None:
+            text = _string_literal(right)
+            other = left
+        if text is None:
+            continue
+        column = other.this if isinstance(other, exp.Lower) else other
+        if isinstance(column, exp.Column):
+            found.append((eq, column, text))
+    return found
+
+
+def _fold(text: str) -> str:
+    """Casefolded, accent-free, single-spaced (``Pão`` -> ``pao``)."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(plain.casefold().split())
+
+
+def _typed_by_visitor(text: str, question: str) -> bool:
+    """The literal is a word the visitor wrote, not a filter value the model chose.
+
+    ``status = 'published'`` stays exact (ILIKE would also match ``unpublished``);
+    only the visitor's own search term (``azeite``) is widened.
+    """
+    word = _fold(text)
+    return len(word) >= 3 and any(ch.isalpha() for ch in word) and word in _fold(question)
+
+
+def _parse(sql: str) -> exp.Expression | None:
+    try:
+        return sqlglot.parse_one(sql, read="postgres")
+    except sqlglot.errors.SqlglotError:
+        return None
+
+
+def _has_text_equality(sql: str) -> bool:
+    tree = _parse(sql)
+    return tree is not None and bool(_text_equalities(tree))
+
+
+def _relax_text_match(sql: str, question: str) -> str | None:
+    """Turn ``lower(col) = 'word'`` into ``col ILIKE '%word%'`` for typed words.
+
+    A shop question names part of a product (``azeite``); the stored name is longer.
+    Only WHERE filters whose literal the visitor typed change; ``%``, ``_`` and
+    backslash in the word are escaped so they match literally. Returns None when
+    there is nothing to relax. Never logs the SQL.
+    """
+    tree = _parse(sql)
+    if tree is None:
+        return None
+    changed = False
+    for eq, column, text in _text_equalities(tree):
+        if not _typed_by_visitor(text, question):
+            continue
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        eq.replace(exp.ILike(this=column.copy(), expression=exp.Literal.string(f"%{escaped}%")))
+        changed = True
+    if not changed:
+        return None
+    return tree.sql(dialect="postgres")
+
+
+def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str, allowed) -> object:
+    """Re-run once with partial ILIKE when a typed text equality matched nothing."""
+    relaxed = _relax_text_match(sql, question)
+    if relaxed is None:
+        log.info("sqlqa/pipeline company=%s stage=relax_text skipped=1 rows=0", company_id)
+        return result
+    try:
+        relaxed_sql = validate_sql(relaxed, allowed)
+    except SQLRejected as exc:
+        log.info(
+            "sqlqa/pipeline company=%s stage=relax_text validation=fail reason=%s",
+            company_id,
+            exc.reason,
+        )
+        return result
+    try:
+        relaxed_result = run_sql(relaxed_sql, company_id=company_id, allowed=allowed)
+    except RunnerError as exc:
+        log.info(
+            "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=0 reason=%s",
+            company_id,
+            exc.reason,
+        )
+        return result
+    log.info(
+        "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=%s",
+        company_id,
+        relaxed_result.row_count,
+    )
+    return relaxed_result if relaxed_result.row_count > 0 else result
+
+
 def _finish(company_id: str, answer: SqlAnswer) -> SqlAnswer:
     log.info(
-        "sqlqa/pipeline company=%s status=%s reason=%s attempts=%s",
+        "sqlqa/pipeline company=%s stage=done status=%s reason=%s attempts=%s rows=%s",
         company_id,
         answer.status,
         answer.reason,
         answer.attempts,
+        answer.row_count,
     )
     return answer

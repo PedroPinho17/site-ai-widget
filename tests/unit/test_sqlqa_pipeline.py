@@ -7,7 +7,7 @@ import pytest
 
 from site_ai_widget.sqlqa import pipeline
 from site_ai_widget.sqlqa.generator import RETRY_HINTS, retry_hint
-from site_ai_widget.sqlqa.pipeline import SqlAnswer, answer_with_sql
+from site_ai_widget.sqlqa.pipeline import SqlAnswer, _relax_text_match, answer_with_sql
 from site_ai_widget.sqlqa.retrieval import ColumnInfo, SchemaSlice, TableInfo
 from site_ai_widget.sqlqa.runner import RunnerError, RunResult
 from site_ai_widget.sqlqa.validator import SQLRejected
@@ -16,6 +16,7 @@ COMPANY = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 SENTINEL_Q = "SENTINEL-QUESTION-ZZZ"
 SENTINEL_SQL = "SELECT name FROM products WHERE sku = 'SENTINEL-SKU'"
 SENTINEL_ROW = "SENTINEL-ROW-VALUE"
+BS = chr(92)  # one backslash
 
 ALLOWED = {("public", "products"): frozenset({"id", "name", "price", "sku"})}
 
@@ -287,8 +288,238 @@ def test_real_validator_blocks_writes_without_running(monkeypatch, bad_sql):
     assert run_calls["n"] == 0
 
 
+def test_empty_text_equality_is_rerun_as_ilike(monkeypatch):
+    """lower(name) = 'azeite' matches nothing; ILIKE '%azeite%' returns the price."""
+    exact = "SELECT p.price FROM products AS p WHERE lower(p.name) = 'azeite' LIMIT 10"
+    seen: list[str] = []
+
+    def run(sql, **kwargs):
+        seen.append(sql)
+        if "ILIKE" in sql.upper():
+            return RunResult(
+                columns=["price"],
+                rows=[["8.49"]],
+                row_count=1,
+                truncated=False,
+                elapsed_ms=1,
+            )
+        return RunResult(columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1)
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: exact)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Qual o preço do azeite?")
+    assert out.status == "ok"
+    assert out.row_count == 1
+    assert out.rows == [["8.49"]]
+    assert out.attempts == 1
+    assert len(seen) == 2
+    assert "ILIKE" in seen[1].upper()
+
+
+def test_relax_text_match_escapes_like_wildcards():
+    relaxed = _relax_text_match(
+        "SELECT p.name FROM products AS p WHERE p.name = '100%_bio' LIMIT 5",
+        "tem azeite 100%_bio?",
+    )
+    pattern = "'%100" + BS + "%" + BS + "_bio%'"
+    assert relaxed == f"SELECT p.name FROM products AS p WHERE p.name ILIKE {pattern} LIMIT 5"
+
+
+def test_numeric_equality_is_not_relaxed(monkeypatch):
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return 'SELECT p.price FROM products AS p WHERE p.price = 0 LIMIT 10'
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(
+        pipeline,
+        "run_sql",
+        lambda *a, **k: RunResult(
+            columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1
+        ),
+    )
+
+    out = answer_with_sql(COMPANY, SENTINEL_Q)
+    assert out.status == "ok"
+    assert out.row_count == 0
+    assert gens["n"] == 1  # no text filter: a real empty result, no extra LLM call
+
+
+def test_relax_log_has_no_sql_or_values(monkeypatch, caplog):
+    exact = "SELECT p.price FROM products AS p WHERE lower(p.name) = 'azeite' LIMIT 10"
+
+    def run(sql, **kwargs):
+        if "ILIKE" in sql.upper():
+            return RunResult(
+                columns=["price"], rows=[["8.49"]], row_count=1, truncated=False, elapsed_ms=1
+            )
+        return RunResult(columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1)
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: exact)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    with caplog.at_level(logging.INFO, logger="site_ai_widget"):
+        answer_with_sql(COMPANY, f"{SENTINEL_Q} azeite")
+    text = " ".join(r.message for r in caplog.records)
+    assert SENTINEL_Q not in text
+    assert "stage=relax_text" in text
+    assert "validation=pass" in text
+    assert "rows=1" in text
+    assert "SELECT" not in text
+    assert "azeite" not in text
+    assert "8.49" not in text
+
+
 def test_exports():
     from site_ai_widget import sqlqa
 
     assert sqlqa.SqlAnswer is SqlAnswer
     assert sqlqa.answer_with_sql is answer_with_sql
+
+
+def test_only_the_visitors_word_is_widened_not_other_filters():
+    """status = 'published' stays exact: ILIKE would also match 'unpublished'."""
+    relaxed = _relax_text_match(
+        "SELECT p.name FROM products AS p "
+        "WHERE p.status = 'published' AND lower(p.name) = 'azeite' LIMIT 10",
+        "Qual o preço do azeite?",
+    )
+    assert relaxed == (
+        "SELECT p.name FROM products AS p "
+        "WHERE p.status = 'published' AND p.name ILIKE '%azeite%' LIMIT 10"
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Select-list CASE: relaxing it would change the values a column returns.
+        "SELECT CASE WHEN p.name = 'azeite' THEN 1 ELSE 0 END AS f FROM products AS p LIMIT 10",
+        # NOT: relaxing it would hide more rows, not fewer.
+        "SELECT p.name FROM products AS p WHERE NOT (p.name = 'azeite') LIMIT 10",
+        # JOIN ... ON and HAVING are not plain row filters.
+        "SELECT p.name FROM products AS p JOIN products AS q ON q.name = 'azeite' LIMIT 10",
+        "SELECT p.name, COUNT(*) AS n FROM products AS p GROUP BY p.name "
+        "HAVING p.name = 'azeite' LIMIT 10",
+        # Inside a function call in WHERE.
+        "SELECT p.name FROM products AS p WHERE COALESCE(p.name = 'azeite', FALSE) LIMIT 10",
+    ],
+    ids=["case", "not", "join-on", "having", "function"],
+)
+def test_equalities_outside_plain_where_filters_are_untouched(sql):
+    assert _relax_text_match(sql, "Qual o preço do azeite?") is None
+
+
+@pytest.mark.parametrize(
+    ("literal", "question"),
+    [
+        ("published", "Qual o preço do azeite?"),  # chosen by the model, not typed
+        ("ab", "tem ab?"),  # too short to widen safely
+        ("123", "o produto 123 existe?"),  # no letters: an id or code stays exact
+    ],
+)
+def test_words_the_visitor_did_not_type_stay_exact(literal, question):
+    sql = f"SELECT p.name FROM products AS p WHERE p.name = '{literal}' LIMIT 10"
+    assert _relax_text_match(sql, question) is None
+
+
+def test_accents_and_case_still_count_as_typed():
+    relaxed = _relax_text_match(
+        "SELECT p.name FROM products AS p WHERE lower(p.name) = 'pao' LIMIT 10",
+        "Têm PÃO de milho?",
+    )
+    assert relaxed == "SELECT p.name FROM products AS p WHERE p.name ILIKE '%pao%' LIMIT 10"
+
+
+def test_quote_in_the_word_stays_inside_the_literal():
+    relaxed = _relax_text_match(
+        "SELECT p.name FROM products AS p WHERE p.name = 'o''neil' LIMIT 10",
+        "têm o'neil?",
+    )
+    assert relaxed == "SELECT p.name FROM products AS p WHERE p.name ILIKE '%o''neil%' LIMIT 10"
+
+
+def test_relaxed_query_goes_through_the_real_validator(monkeypatch):
+    """The ILIKE rewrite is validated again: approved tables only, LIMIT kept."""
+    from site_ai_widget.sqlqa.validator import validate_sql as real_validate
+
+    exact = "SELECT p.price FROM products AS p WHERE lower(p.name) = 'azeite' LIMIT 10"
+    validated: list[str] = []
+
+    def validate(sql, allowed):
+        out = real_validate(sql, allowed)
+        validated.append(out)
+        return out
+
+    def run(sql, **kwargs):
+        if "ILIKE" in sql.upper():
+            return RunResult(columns=["price"], rows=[["8.49"]], row_count=1, truncated=False, elapsed_ms=1)
+        return RunResult(columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1)
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: exact)
+    monkeypatch.setattr(pipeline, "validate_sql", validate)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Qual o preço do azeite?")
+    assert out.status == "ok"
+    assert len(validated) == 2
+    assert "ILIKE" in validated[1].upper()
+    assert "LIMIT 10" in validated[1].upper()
+
+
+def test_relaxed_query_on_an_unapproved_table_is_dropped(monkeypatch):
+    """If the rewrite were ever refused, the original empty result stands; no other table is read."""
+    exact = "SELECT p.price FROM products AS p WHERE lower(p.name) = 'azeite' LIMIT 10"
+    ran: list[str] = []
+
+    def validate(sql, allowed):
+        if "ILIKE" in sql.upper():
+            raise SQLRejected("table_not_allowed")
+        return sql
+
+    def run(sql, **kwargs):
+        ran.append(sql)
+        return RunResult(columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1)
+
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return exact
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", validate)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Qual o preço do azeite?")
+    assert out.status == "ok"
+    assert out.row_count == 0
+    assert all("ILIKE" not in sql.upper() for sql in ran)
+    assert gens["n"] == 2  # the one LLM retry, never more
+
+
+def test_no_rows_retry_runs_at_most_once(monkeypatch):
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return "SELECT p.price FROM products AS p WHERE p.name = 'caviar' LIMIT 10"
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(
+        pipeline,
+        "run_sql",
+        lambda *a, **k: RunResult(columns=["price"], rows=[], row_count=0, truncated=False, elapsed_ms=1),
+    )
+    out = answer_with_sql(COMPANY, "Têm caviar?")
+    assert out.status == "ok"
+    assert out.row_count == 0
+    assert out.attempts == 2
+    assert gens["n"] == 2

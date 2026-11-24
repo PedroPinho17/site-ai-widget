@@ -218,7 +218,9 @@ def present_sql_answer(
     """
     locale = normalize_lang(lang)
     fallback = format_sql_answer_deterministic(columns, rows, locale, truncated=truncated)
+    row_count = len(rows)
     if not rows:
+        log.info("sqlqa/present stage=fallback reason=no_rows rows=0")
         return fallback
 
     complete = llm_complete
@@ -228,13 +230,16 @@ def present_sql_answer(
             from site_ai_widget.llm.client import complete_chat
 
             if not get_settings().groq_keys():
+                log.info("sqlqa/present stage=fallback reason=no_llm rows=%s", row_count)
                 return fallback
             complete = complete_chat
         except Exception:
+            log.info("sqlqa/present stage=fallback reason=llm_error rows=%s", row_count)
             return fallback
 
     payload = _rows_for_llm(columns, rows, locale)
     if not payload:
+        log.info("sqlqa/present stage=fallback reason=empty_cells rows=%s", row_count)
         return fallback
     rows_json = _escape_untrusted(json.dumps(payload, ensure_ascii=False))
     q = _WS.sub(" ", (question or "").strip())[:_MAX_QUESTION_CHARS]
@@ -258,7 +263,11 @@ def present_sql_answer(
     try:
         raw = complete(messages, temperature=0)
     except Exception as exc:
-        log.warning("SQL answer LLM failed: %s", type(exc).__name__)
+        log.info(
+            "sqlqa/present stage=fallback reason=llm_error rows=%s error=%s",
+            row_count,
+            type(exc).__name__,
+        )
         return fallback
 
     text = (raw or "").strip()
@@ -267,5 +276,7 @@ def present_sql_answer(
     # visitor how many more there are, exactly like the deterministic list.
     shown = fallback if more is None else fallback.rsplit("\n", 1)[0]
     if not _llm_answer_ok(text, fallback=shown, payload=payload):
+        log.info("sqlqa/present stage=fallback reason=validation rows=%s", row_count)
         return fallback
+    log.info("sqlqa/present stage=llm validation=pass rows=%s", row_count)
     return text if more is None else f"{text}\n{more}"
