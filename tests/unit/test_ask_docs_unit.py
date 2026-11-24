@@ -125,3 +125,51 @@ def test_ask_rate_limit(monkeypatch):
         reset_limiters()
         clear_settings_cache()
         set_embedder(None)
+
+
+def _fake_chunk() -> dict:
+    return {
+        "n": 1,
+        "id": uuid4(),
+        "document_id": uuid4(),
+        "document_name": "manual-ficticio.pdf",
+        "page": 2,
+        "chunk_index": 0,
+        "content": "A loja ficticia abre ao domingo das 10 as 14.",
+    }
+
+
+def test_ask_documents_matched_false_when_search_finds_nothing(monkeypatch):
+    from site_ai_widget.docs import ask as docs_ask
+
+    monkeypatch.setattr(docs_ask, "hybrid_search", lambda *a, **k: [])
+
+    def no_llm(*a, **k):
+        raise AssertionError("LLM must not be called without matching text")
+
+    out = docs_ask.ask_documents(company_id=uuid4(), question="Abrem ao domingo?", llm_complete=no_llm)
+    assert out["matched"] is False
+    assert out["citations"] == []
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_pages"),
+    [
+        ("Abre ao domingo das 10 as 14.", []),
+        ("Abre ao domingo das 10 as 14 [1].", [2]),
+    ],
+    ids=["no_marker", "with_marker"],
+)
+def test_ask_documents_matched_true_when_search_finds_text(monkeypatch, answer, expected_pages):
+    from site_ai_widget.docs import ask as docs_ask
+
+    monkeypatch.setattr(docs_ask, "hybrid_search", lambda *a, **k: [_fake_chunk()])
+
+    out = docs_ask.ask_documents(
+        company_id=uuid4(),
+        question="Abrem ao domingo?",
+        llm_complete=lambda messages, temperature=0: answer,
+    )
+    assert out["matched"] is True
+    assert out["answer"] == answer
+    assert [c["page"] for c in out["citations"]] == expected_pages

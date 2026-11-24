@@ -128,7 +128,9 @@ Fallback order:
 
 Each `/ask` call counts as **3** hits in the per-IP ask rate-limit bucket (it
 can make up to three LLM calls: generate, retry, docs). `/ask/docs` still
-counts as 1. A per-company ask limit is planned later.
+counts as 1. A per-company ask limit is planned later. `ASK_RATE_LIMIT` must be
+at least **3** (the weight of one `/ask` call); a lower value fails settings
+validation at startup.
 
 Row values are untrusted data and are not passed back into an LLM in this step.
 `POST /ask/docs` remains available for docs-only callers.
