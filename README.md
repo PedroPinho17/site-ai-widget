@@ -144,7 +144,7 @@ The script is `GET /embed.js`. Origin must match the key’s allowlist exactly.
 
 ## Evaluation
 
-The evaluation set is `eval/questions.json` (40 fictional Atlas items). Run it **inside the app container** so the stored client DSN host `clientdb` resolves (the Windows/host name `127.0.0.1:5436` is a different address):
+The evaluation set is `eval/questions.json` (40 fictional Atlas items). Run it **inside the app container** so the stored client DSN host `clientdb` resolves. Compose bind-mounts `./eval` and `./docs` into `/app`, so questions are read from the host and `eval/results/`, `eval/history.csv`, and `docs/evaluation.md` are written back to the host (not into the image). Recreate the app container after pulling this compose change (`docker compose up -d app`).
 
 ```bash
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5

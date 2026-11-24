@@ -3,6 +3,7 @@
 Run inside the Compose **app** container so the stored client DSN hostname
 ``clientdb`` resolves (host port 5436 is not that name):
 
+    docker compose up -d app
     docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 
 This module does not print secrets. It is safe to import in unit tests with a
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -35,13 +37,39 @@ from site_ai_widget.sqlqa.runner import is_connection_failure, sqlstate_class
 
 log = logging.getLogger("site_ai_widget.eval")
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_QUESTIONS = REPO_ROOT / "eval" / "questions.json"
-RESULTS_DIR = REPO_ROOT / "eval" / "results"
-HISTORY_CSV = REPO_ROOT / "eval" / "history.csv"
-CHECKPOINT = REPO_ROOT / "eval" / CHECKPOINT_NAME
-PARTIAL_MD = REPO_ROOT / "docs" / "evaluation.partial.md"
-FULL_MD = REPO_ROOT / "docs" / "evaluation.md"
+
+def repo_root() -> Path:
+    """Directory that holds ``eval/questions.json`` (host bind-mount or source tree).
+
+    Inside Compose the package is installed under ``/opt/venv``, so ``__file__``
+    is not the git root. Prefer ``EVAL_ROOT``, then a source-tree layout, then
+    cwd / ``/app`` when those contain the questions file.
+    """
+    configured = (os.environ.get("EVAL_ROOT") or "").strip()
+    if configured:
+        return Path(configured)
+    here = Path(__file__).resolve()
+    if here.parent.name == "site_ai_widget" and here.parent.parent.name == "src":
+        return here.parents[2]
+    for candidate in (Path.cwd(), Path("/app")):
+        if (candidate / "eval" / "questions.json").is_file():
+            return candidate
+    return Path.cwd()
+
+
+def _eval_paths(root: Path | None = None) -> dict[str, Path]:
+    base = root or repo_root()
+    return {
+        "questions": base / "eval" / "questions.json",
+        "results": base / "eval" / "results",
+        "history": base / "eval" / "history.csv",
+        "checkpoint": base / "eval" / CHECKPOINT_NAME,
+        "partial_md": base / "docs" / "evaluation.partial.md",
+        "full_md": base / "docs" / "evaluation.md",
+    }
+
+
+DEFAULT_QUESTIONS = _eval_paths()["questions"]
 
 MAX_QUOTA_RETRIES = 8
 MAX_CONNECTION_RETRIES = 3
@@ -268,12 +296,18 @@ def run_eval(
     company_id: str | None = None,
     company_slug: str | None = None,
     sleep: Callable[[float], None] = time.sleep,
-    results_dir: Path = RESULTS_DIR,
-    history_path: Path = HISTORY_CSV,
-    checkpoint_file: Path = CHECKPOINT,
-    partial_md: Path = PARTIAL_MD,
-    full_md: Path = FULL_MD,
+    results_dir: Path | None = None,
+    history_path: Path | None = None,
+    checkpoint_file: Path | None = None,
+    partial_md: Path | None = None,
+    full_md: Path | None = None,
 ) -> dict[str, Any]:
+    paths = _eval_paths()
+    results_dir = results_dir or paths["results"]
+    history_path = history_path or paths["history"]
+    checkpoint_file = checkpoint_file or paths["checkpoint"]
+    partial_md = partial_md or paths["partial_md"]
+    full_md = full_md or paths["full_md"]
     bundle = load_questions(questions_path)
     items: list[dict[str, Any]] = list(bundle["items"])
     done: set[str] = set()
@@ -370,7 +404,7 @@ def run_eval(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the site-ai-widget evaluation set.")
-    parser.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS)
+    parser.add_argument("--questions", type=Path, default=None)
     parser.add_argument("--delay", type=float, default=0.0, help="Seconds to wait between items.")
     parser.add_argument("--batch-size", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
@@ -385,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         payload = run_eval(
-            questions_path=args.questions,
+            questions_path=args.questions or _eval_paths()["questions"],
             only=args.only,
             limit=args.limit,
             delay=args.delay,

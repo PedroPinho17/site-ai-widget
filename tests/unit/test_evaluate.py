@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import psycopg
@@ -20,9 +21,31 @@ from site_ai_widget.evaluate import (
     filter_items,
     is_client_db_unreachable,
     load_questions,
+    repo_root,
     run_eval,
 )
 from site_ai_widget.sqlqa.runner import RunnerError, is_connection_failure, sqlstate_class
+
+
+def test_compose_bind_mounts_eval_tree_onto_app():
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    assert "./eval:/app/eval" in text
+    assert "./docs:/app/docs" in text
+    assert "EVAL_ROOT: /app" in text
+    dockerfile = compose.parent / "Dockerfile"
+    df = dockerfile.read_text(encoding="utf-8")
+    assert "COPY eval" not in df
+    assert "COPY docs" not in df
+
+
+def test_repo_root_uses_eval_root_env(tmp_path, monkeypatch):
+    questions = tmp_path / "eval" / "questions.json"
+    questions.parent.mkdir()
+    questions.write_text('{"items": []}', encoding="utf-8")
+    monkeypatch.setenv("EVAL_ROOT", str(tmp_path))
+    assert repo_root() == tmp_path
+    assert (repo_root() / "eval" / "questions.json").is_file()
 
 
 def test_questions_file_counts_and_fictional_demo_only():

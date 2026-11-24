@@ -80,13 +80,16 @@ Requires `DEMO_PASSWORD_ATLAS` and `DEMO_PASSWORD_LIMA`. With Compose, `RUN_SEED
 
 Do not run this in CI against Groq unless you intend to consume quota.
 
-The saved client DSN uses the Compose hostname `clientdb` (port 5432 **inside** the network). That name does not resolve on the Windows host; the published port is `127.0.0.1:5436`. Eval therefore runs in the **app** container (same network as the API), not `uv run` on the host:
+The saved client DSN uses the Compose hostname `clientdb` (port 5432 **inside** the network). That name does not resolve on the Windows host; the published port is `127.0.0.1:5436`. Eval therefore runs in the **app** container (same network as the API), not `uv run` on the host.
+
+`docker-compose.yml` bind-mounts `./eval` → `/app/eval` and `./docs` → `/app/docs`, and sets `EVAL_ROOT=/app`. The image does not contain `eval/` or `docs/` (see `.dockerignore`). After changing those mounts, recreate the service so they attach:
 
 ```bash
+docker compose up -d app
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 ```
 
-Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes `eval/results/<timestamp>.json` and appends `eval/history.csv`. `docs/evaluation.md` is written only after a **full** run. If every SQL attempt hits `db_error` / connection failure, the process exits with `client DB unreachable` and does **not** write those score files. Outputs are gitignored except `eval/questions.json`.
+Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes host files `eval/results/<timestamp>.json`, `eval/history.csv`, and (full run only) `docs/evaluation.md`. If every SQL attempt hits `db_error` / connection failure, the process exits with `client DB unreachable` and does **not** write those score files. Outputs are gitignored except `eval/questions.json`.
 
 ## Troubleshooting
 

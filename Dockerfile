@@ -26,6 +26,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src ./src
 COPY db ./db
 COPY demo ./demo
+# eval/ and docs/ are bind-mounted at runtime (see docker-compose.yml). Do not COPY them.
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -f uv.lock ]; then uv sync --frozen --no-dev; \
     else uv sync --no-dev; fi

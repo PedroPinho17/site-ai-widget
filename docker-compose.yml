@@ -52,6 +52,8 @@ services:
       CLIENTDB_ALLOWED_HOSTS: clientdb:5432
       # 1 = seed demo companies + PDFs before uvicorn starts (shell or .env)
       RUN_SEED: ${RUN_SEED:-0}
+      # Eval reads questions.json and writes results here (bind-mounted below).
+      EVAL_ROOT: /app
     depends_on:
       db:
         condition: service_healthy
@@ -64,6 +66,9 @@ services:
     volumes:
       - uploads:/app/data/uploads
       - hf_cache:/opt/hf
+      # Host tree: questions.json in, results/history/evaluation.md out. Not in the image.
+      - ./eval:/app/eval
+      - ./docs:/app/docs
 
 volumes:
   pgdata:

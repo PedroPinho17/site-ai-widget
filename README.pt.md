@@ -144,7 +144,7 @@ O script é `GET /embed.js`. A origem tem de coincidir exatamente com a lista da
 
 ## Avaliação
 
-O conjunto está em `eval/questions.json` (40 itens fictícios da Atlas). Corra **dentro do contentor da app** para o anfitrião `clientdb` do DSN guardado resolver (em Windows o porto `127.0.0.1:5436` é outro endereço):
+O conjunto está em `eval/questions.json` (40 itens fictícios da Atlas). Corra **dentro do contentor da app** para o anfitrião `clientdb` resolver. O Compose monta `./eval` e `./docs` em `/app`: as perguntas vêm do anfitrião e `eval/results/`, `eval/history.csv` e `docs/evaluation.md` voltam para o repositório (não ficam na imagem). Recrie o contentor da app depois desta alteração (`docker compose up -d app`).
 
 ```bash
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
