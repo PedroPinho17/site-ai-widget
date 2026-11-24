@@ -312,6 +312,21 @@ def test_db_error_detail_leaks_nothing(monkeypatch):
     assert "SELECT" not in exc.value.detail
 
 
+def test_sqlstate_class_08_is_connection_not_db_error(monkeypatch):
+    class Lost(psycopg.OperationalError):
+        @property
+        def sqlstate(self) -> str:
+            return "08006"
+
+    conn = _FakeConn(raise_on_query=Lost("could not connect to SECRET-HOST"))
+    with pytest.raises(RunnerError) as exc:
+        _run(monkeypatch, conn)
+    assert exc.value.reason == "connection"
+    assert "SECRET-HOST" not in exc.value.detail
+    assert "SECRET-HOST" not in str(exc.value)
+    assert exc.value.__cause__ is None
+
+
 def test_missing_connection_is_db_error(monkeypatch):
     monkeypatch.setattr(runner, "load_connection_params", lambda cid: None)
 
@@ -356,6 +371,22 @@ def test_load_connection_failure_maps_to_db_error(monkeypatch, err):
     assert "SECRET" not in str(exc.value)
     assert exc.value.__cause__ is None
     assert exc.value.__context__ is None
+
+
+def test_load_connection_sqlstate_08_is_connection(monkeypatch):
+    class Lost(psycopg.OperationalError):
+        @property
+        def sqlstate(self) -> str:
+            return "08001"
+
+    def boom(company_id):
+        raise Lost("connection to SECRET-HOST failed")
+
+    monkeypatch.setattr(runner, "load_connection_params", boom)
+    with pytest.raises(RunnerError) as exc:
+        run_sql(_ok_sql(), company_id=COMPANY, allowed=ALLOWED)
+    assert exc.value.reason == "connection"
+    assert "SECRET-HOST" not in str(exc.value)
 
 
 def test_api_error_from_session_maps_to_db_error(monkeypatch):

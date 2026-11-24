@@ -58,7 +58,10 @@ Thumbs.db
 htmlcov/
 .ruff_cache/
 
-# Eval checkpoints (later phases)
+# Eval checkpoints / live outputs (questions.json stays tracked)
 eval/.checkpoint.json
+eval/.checkpoint.json.tmp
 eval/checkpoints/
+eval/results/
+eval/history.csv
 docs/evaluation.partial.md

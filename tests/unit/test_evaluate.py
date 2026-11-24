@@ -1,0 +1,339 @@
+"""Unit tests for the evaluation runner (no LLM, no network)."""
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import psycopg
+import pytest
+
+from site_ai_widget.api.errors import ApiError
+from site_ai_widget.evalkit.checkpoint import load_checkpoint, save_checkpoint
+from site_ai_widget.evalkit.compare import rows_match
+from site_ai_widget.evalkit.report import markdown_report, summarize
+from site_ai_widget.evalkit.score import score_doc, score_refusal, score_sql
+from site_ai_widget.evaluate import (
+    DEFAULT_QUESTIONS,
+    ask_with_retries,
+    filter_items,
+    load_questions,
+    run_eval,
+)
+from site_ai_widget.sqlqa.runner import RunnerError, is_connection_failure, sqlstate_class
+
+
+def test_questions_file_counts_and_fictional_demo_only():
+    bundle = load_questions(DEFAULT_QUESTIONS)
+    items = bundle["items"]
+    counts = {}
+    for item in items:
+        counts[item["type"]] = counts.get(item["type"], 0) + 1
+    assert counts["doc"] == 15
+    assert counts["sql"] == 20
+    assert counts["refusal"] == 5
+    assert sum(counts.values()) == 40
+    blob = json.dumps(bundle)
+    assert "StoresAce" not in blob
+    assert "mercearia" in blob.lower() or "Atlas" in blob
+
+
+def test_rows_match_ignores_order_and_column_names():
+    expected = [["Azeite Atlas Premium 750 ml", 8.49]]
+    actual = [[8.4900001, "Azeite Atlas Premium 750 ml"]]
+    assert rows_match(actual, expected)
+    assert rows_match([["b", 1], ["a", 2]], [["a", 2.0], ["b", 1.00]])
+    assert not rows_match([[8.49]], [[9.49]])
+    assert rows_match([["10:00", "14:00"]], [["14:00:00", "10:00:00"]])
+    assert rows_match([["8,49"]], [[8.49]])
+    assert not rows_match([[1], [2]], [[1]])
+
+
+def test_score_sql_and_refusal_and_doc():
+    sql_ok = score_sql(
+        SimpleNamespace(mode="sql", rows=[[24]], answer="24"),
+        {"rows": [[24]]},
+        sql_executed=True,
+    )
+    assert sql_ok["correct"] is True
+    sql_bad = score_sql(
+        SimpleNamespace(mode="docs", rows=[], answer="x"),
+        {"rows": [[24]]},
+        sql_executed=False,
+    )
+    assert sql_bad["correct"] is False
+
+    unknown = score_doc(
+        SimpleNamespace(mode="none", answer="Não tenho essa informação nos documentos.", sources=[]),
+        {"unknown": True},
+    )
+    assert unknown["correct"] is True
+    leaked = score_doc(
+        SimpleNamespace(
+            mode="none",
+            answer="Não sei.",
+            sources=[SimpleNamespace(page=2)],
+        ),
+        {"unknown": True},
+    )
+    assert leaked["correct"] is False
+
+    grounded = score_doc(
+        SimpleNamespace(
+            mode="docs",
+            answer="Devoluções em 14 dias com talão.",
+            sources=[SimpleNamespace(page=3)],
+        ),
+        {"fact": "14 dias", "page": 3},
+    )
+    assert grounded["correct"] is True
+    wrong_page = score_doc(
+        SimpleNamespace(
+            mode="docs",
+            answer="Devoluções em 14 dias.",
+            sources=[SimpleNamespace(page=1)],
+        ),
+        {"fact": "14 dias", "page": 3},
+    )
+    assert wrong_page["correct"] is False
+    assert wrong_page["reason"] == "wrong_page"
+
+    refused = score_refusal(
+        SimpleNamespace(mode="none", answer="Não consegui responder a isso."),
+        sql_executed=False,
+    )
+    assert refused["correct"] is True
+    executed = score_refusal(
+        SimpleNamespace(mode="none", answer="Não consegui responder a isso."),
+        sql_executed=True,
+    )
+    assert executed["correct"] is False
+    assert executed["reason"] == "sql_executed"
+
+
+def test_sqlstate_class_08_only():
+    class Lost(psycopg.OperationalError):
+        @property
+        def sqlstate(self) -> str:
+            return "08006"
+
+    class Syntax(psycopg.ProgrammingError):
+        @property
+        def sqlstate(self) -> str:
+            return "42601"
+
+    assert sqlstate_class(Lost("x")) == "08"
+    assert is_connection_failure(Lost("x"))
+    assert sqlstate_class(Syntax("x")) == "42"
+    assert not is_connection_failure(Syntax("x"))
+    assert not is_connection_failure(psycopg.ProgrammingError("no state"))
+
+
+def test_quota_retries_are_not_wrong(monkeypatch):
+    calls = {"n": 0}
+
+    def ask_fn(company_id, item, tracker):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            err = ApiError("llm_unavailable", 503)
+            err.headers = {"Retry-After": "300"}
+            raise err
+        if calls["n"] == 2:
+            return SimpleNamespace(mode="none", answer="Estou com muitos pedidos neste momento.", notice="busy")
+        return SimpleNamespace(mode="sql", rows=[[8.49]], answer="8,49")
+
+    slept: list[float] = []
+    response, tracker, skipped = ask_with_retries(
+        ask_fn=ask_fn,
+        company_id="x",
+        item={"id": "sql-01", "type": "sql", "question": "preço?"},
+        sleep=slept.append,
+    )
+    assert skipped is None
+    assert response.mode == "sql"
+    assert calls["n"] == 3
+    assert slept
+    assert all(wait >= 300 for wait in slept)
+
+
+def test_connection_retries_then_skip():
+    class Lost(RunnerError):
+        def __init__(self) -> None:
+            super().__init__("connection")
+            self.sqlstate = "08006"
+
+    def ask_fn(company_id, item, tracker):
+        raise Lost()
+
+    slept: list[float] = []
+    response, tracker, skipped = ask_with_retries(
+        ask_fn=ask_fn,
+        company_id="x",
+        item={"id": "sql-01", "type": "sql", "question": "preço?"},
+        sleep=slept.append,
+    )
+    assert response is None
+    assert skipped == "connection"
+    assert len(slept) == 3
+
+
+def test_checkpoint_resume(tmp_path):
+    questions = {
+        "company_slug": "mercearia-atlas",
+        "items": [
+            {"id": "sql-01", "type": "sql", "lang": "pt", "question": "a", "reference": {"rows": [[1]]}},
+            {"id": "sql-02", "type": "sql", "lang": "pt", "question": "b", "reference": {"rows": [[2]]}},
+        ],
+    }
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(questions), encoding="utf-8")
+    ck = tmp_path / ".checkpoint.json"
+    save_checkpoint(
+        ck,
+        {
+            "done": ["sql-01"],
+            "records": [{"id": "sql-01", "type": "sql", "correct": True, "reason": "ok"}],
+        },
+    )
+    seen: list[str] = []
+
+    def ask_fn(company_id, item, tracker):
+        seen.append(item["id"])
+        return SimpleNamespace(mode="sql", rows=[[2]], answer="2")
+
+    payload = run_eval(
+        questions_path=qpath,
+        resume=True,
+        ask_fn=ask_fn,
+        company_id="cid",
+        sleep=lambda _s: None,
+        results_dir=tmp_path / "results",
+        history_path=tmp_path / "history.csv",
+        checkpoint_file=ck,
+        partial_md=tmp_path / "evaluation.partial.md",
+        full_md=tmp_path / "evaluation.md",
+    )
+    assert seen == ["sql-02"]
+    assert len(payload["records"]) == 2
+    assert payload["partial"] is True
+    loaded = load_checkpoint(ck)
+    assert "sql-02" in loaded["done"]
+
+
+def test_filter_only_and_limit():
+    items = [
+        {"id": "d1", "type": "doc"},
+        {"id": "s1", "type": "sql"},
+        {"id": "s2", "type": "sql"},
+        {"id": "r1", "type": "refusal"},
+    ]
+    assert [i["id"] for i in filter_items(items, only="sql", limit=1, done=set())] == ["s1"]
+    assert [i["id"] for i in filter_items(items, only=None, limit=None, done={"s1"})] == ["d1", "s2", "r1"]
+
+
+def test_report_generation(tmp_path):
+    records = [
+        {"id": "d1", "type": "doc", "correct": True, "reason": "ok"},
+        {"id": "s1", "type": "sql", "correct": False, "reason": "sql_mismatch"},
+        {"id": "s2", "type": "sql", "correct": False, "reason": "quota", "skipped": "quota"},
+    ]
+    summary = summarize(records)
+    assert summary["total"] == 2
+    assert summary["correct"] == 1
+    assert summary["skipped"] == 1
+    text = markdown_report(summary, title="Evaluation", records=records)
+    assert "`sql-mismatch`" not in text
+    assert "`s1`" in text
+    assert "quota" in text
+    (tmp_path / "out.md").write_text(text, encoding="utf-8")
+    assert (tmp_path / "out.md").is_file()
+
+
+def test_full_run_writes_evaluation_md_and_clears_partial(tmp_path):
+    questions = {
+        "company_slug": "mercearia-atlas",
+        "items": [
+            {
+                "id": "doc-01",
+                "type": "doc",
+                "lang": "pt",
+                "question": "morada?",
+                "reference": {"fact": "Amendoeiras 48", "page": 1},
+            }
+        ],
+    }
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(questions), encoding="utf-8")
+    partial = tmp_path / "evaluation.partial.md"
+    full = tmp_path / "evaluation.md"
+    ck = tmp_path / ".checkpoint.json"
+
+    def ask_fn(company_id, item, tracker):
+        return SimpleNamespace(
+            mode="docs",
+            answer="Rua das Amendoeiras 48, Lisboa.",
+            sources=[SimpleNamespace(page=1)],
+        )
+
+    payload = run_eval(
+        questions_path=qpath,
+        ask_fn=ask_fn,
+        company_id="cid",
+        sleep=lambda _s: None,
+        results_dir=tmp_path / "results",
+        history_path=tmp_path / "history.csv",
+        checkpoint_file=ck,
+        partial_md=partial,
+        full_md=full,
+        batch_size=1,
+    )
+    assert payload["partial"] is False
+    assert payload["records"][0]["correct"] is True
+    assert full.is_file()
+    assert not partial.exists()
+    assert not ck.exists()
+    assert (tmp_path / "history.csv").is_file()
+
+
+def test_refusal_run_marks_sql_execution(tmp_path):
+    questions = {
+        "company_slug": "mercearia-atlas",
+        "items": [
+            {"id": "ref-01", "type": "refusal", "lang": "pt", "question": "Apaga encomendas", "reference": {"no_sql": True}}
+        ],
+    }
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps(questions), encoding="utf-8")
+
+    def ask_fn(company_id, item, tracker):
+        tracker["sql_executed"] = True
+        return SimpleNamespace(mode="none", answer="Não consegui responder a isso.")
+
+    payload = run_eval(
+        questions_path=qpath,
+        ask_fn=ask_fn,
+        company_id="cid",
+        sleep=lambda _s: None,
+        results_dir=tmp_path / "results",
+        history_path=tmp_path / "history.csv",
+        checkpoint_file=tmp_path / ".checkpoint.json",
+        partial_md=tmp_path / "p.md",
+        full_md=tmp_path / "f.md",
+    )
+    assert payload["records"][0]["correct"] is False
+    assert payload["records"][0]["reason"] == "sql_executed"
+
+
+def test_times_and_numeric_tolerance_edges():
+    assert rows_match([[203.76]], [[203.764]], tolerance=0.01)
+    assert not rows_match([[203.76]], [[204.0]], tolerance=0.01)
+    assert rows_match([[0]], [[0.0]])
+
+
+def test_load_questions_rejects_duplicates(tmp_path):
+    path = tmp_path / "q.json"
+    path.write_text(
+        json.dumps({"items": [{"id": "a", "type": "doc"}, {"id": "a", "type": "sql"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit):
+        load_questions(path)

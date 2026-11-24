@@ -49,7 +49,34 @@ _SAFE_DETAILS: dict[str, str] = {
     "timeout": "The query timed out.",
     "result_too_large": "The result exceeds the size limit.",
     "db_error": "The database could not run the query.",
+    "connection": "The database connection was lost.",
 }
+
+
+def sqlstate_class(error: BaseException | None) -> str | None:
+    """Return the two-character SQLSTATE class, when the driver exposes one.
+
+    Only class ``08`` (connection exception) is treated as a connection failure
+    by the evaluation runner. The SQLSTATE code itself is safe to keep; the
+    driver message is not.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        state = getattr(current, "sqlstate", None)
+        if isinstance(state, str) and len(state) >= 2 and state[:2].isalnum():
+            return state[:2].upper()
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def is_connection_failure(error: BaseException | None) -> bool:
+    return sqlstate_class(error) == "08"
+
+
+def _reason_from_pg(error: BaseException) -> str:
+    return "connection" if is_connection_failure(error) else "db_error"
 
 
 @dataclass(frozen=True)
@@ -120,7 +147,9 @@ def run_sql(
     params = None
     try:
         params = load_connection_params(company_id)
-    except (ApiError, psycopg.Error, PoolTimeout, KeyError, ValueError):
+    except psycopg.Error as exc:
+        reason = _reason_from_pg(exc)
+    except (ApiError, PoolTimeout, KeyError, ValueError):
         # App DB down, pool exhausted, bad company_id or unreadable DSN: the
         # original text may hold DB details, so only the reason is kept.
         reason = "db_error"
@@ -145,8 +174,8 @@ def run_sql(
                     reason = "timeout"
                 except RunnerError as exc:
                     reason = exc.reason
-                except psycopg.Error:
-                    reason = "db_error"
+                except psycopg.Error as exc:
+                    reason = _reason_from_pg(exc)
                 finally:
                     with contextlib.suppress(psycopg.Error):
                         conn.rollback()
