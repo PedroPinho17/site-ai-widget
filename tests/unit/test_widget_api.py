@@ -175,6 +175,8 @@ def test_valid_key_returns_answer_and_session(client):
     assert body["columns"] == ["name"]
     assert body["rows"] == [["Azeite"]]
     assert body["row_count"] == 1
+    assert body["answer"] == "Azeite"  # one-row deterministic; never a bare column name
+    assert "SELECT" not in body["answer"]
     assert isinstance(body["session_token"], str)
     assert len(body["session_token"]) >= 40
     assert "SELECT" not in response.text
@@ -373,6 +375,11 @@ def test_same_session_history_is_oldest_first(client):
     assert messages[0]["text"] == "primeira"
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["mode"] == "sql"
+    # History stores the same visitor-facing answer the ask response returned.
+    assert messages[-1]["text"] == second.json()["answer"]
+    assert messages[-1]["text"] == "Azeite"
+    assert "SELECT" not in (messages[-1]["text"] or "")
+    assert messages[-1]["text"] != "price"
 
 
 def test_history_returns_last_50_oldest_first(client):

@@ -122,22 +122,25 @@
   function formatAnswer(data) {
     var lines = [];
     var mode = data && data.mode;
-    if (mode === "sql") {
-      var columns = data.columns || [];
+    /* Prefer the server-built natural answer (SQL and docs). Never invent values. */
+    if (typeof data.answer === "string" && data.answer) {
+      lines.push(data.answer);
+    } else if (mode === "sql") {
+      /* Legacy fallback: values only, never bare column names. */
       var rows = data.rows || [];
-      if (columns.length) {
-        lines.push(columns.map(cellText).join(" | "));
-      }
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i] || [];
         var cells = [];
         for (var j = 0; j < row.length; j++) {
-          cells.push(cellText(row[j]));
+          var cell = cellText(row[j]);
+          if (cell) {
+            cells.push(cell);
+          }
         }
-        lines.push(cells.join(" | "));
+        if (cells.length) {
+          lines.push(cells.join(": "));
+        }
       }
-    } else if (mode === "docs" && typeof data.answer === "string" && data.answer) {
-      lines.push(data.answer);
     }
     /* mode "none": the server's fallback text is English only, so the caller
        shows the localized copy.emptyAnswer instead. */
@@ -154,16 +157,21 @@
     return lines.join("\n");
   }
 
-  /* History stores no table rows, only how many there were. */
+  /* Prefer the stored assistant text (same string the visitor saw). */
   function historyText(item) {
+    /* "none" first: its stored text is the server's English fallback, and the
+       live answer showed the localized copy.emptyAnswer instead. */
     if (item.role === "assistant" && item.mode === "none") {
       return copy.emptyAnswer;
+    }
+    if (typeof item.text === "string" && item.text) {
+      return item.text;
     }
     if (item.role === "assistant" && item.mode === "sql") {
       var n = typeof item.row_count === "number" ? item.row_count : 0;
       return n === 1 ? copy.rowsOne : copy.rowsMany.replace("{n}", String(n));
     }
-    return typeof item.text === "string" ? item.text : "";
+    return "";
   }
 
   function errorKind(status, data) {

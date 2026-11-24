@@ -84,16 +84,63 @@ def test_server_fallback_text_is_never_shown():
     """mode "none" uses the localized copy, never the server's English message."""
     text = _js()
     assert not re.search(r"data\.message\b", text)
-    assert 'mode === "docs" && typeof data.answer === "string"' in text
+    assert 'typeof data.answer === "string" && data.answer' in text
     assert 'item.mode === "none"' in text
     assert "return copy.emptyAnswer;" in text
 
 
-def test_history_shows_sql_turns_by_row_count():
+def test_history_prefers_stored_assistant_text():
     text = _js()
+    assert 'typeof item.text === "string" && item.text' in text
     assert 'item.mode === "sql"' in text
     assert "rowsMany" in text and "rowsOne" in text
     assert "self._add(item.role, text);" in text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_history_text_runs_like_the_live_answer():
+    """Runs the real historyText from embed.js in node with fictional history rows."""
+    import json
+
+    source = _js()
+    start = source.index("  function historyText(item) {")
+    end = source.index("\n  }\n", start) + 4
+    function = source[start:end]
+    cases = [
+        {"role": "assistant", "mode": "sql", "text": "Azeite: 8,90", "row_count": 1},
+        {"role": "assistant", "mode": "none", "text": "I could not answer that from the database."},
+        {"role": "assistant", "mode": "sql", "text": None, "row_count": 3},
+        {"role": "user", "mode": None, "text": "qual o preco do azeite?"},
+    ]
+    script = (
+        'var copy = {emptyAnswer: "Não consegui responder a isso.", '
+        'rowsOne: "Resultado com 1 linha.", rowsMany: "Resultado com {n} linhas."};\n'
+        + function
+        + "\nprocess.stdout.write(JSON.stringify("
+        + json.dumps(cases)
+        + ".map(historyText)));"
+    )
+    result = subprocess.run(
+        [shutil.which("node"), "-e", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        "Azeite: 8,90",  # same text the visitor saw live
+        "Não consegui responder a isso.",  # localized, never the stored English fallback
+        "Resultado com 3 linhas.",  # older rows saved before answers were stored
+        "qual o preco do azeite?",
+    ]
+
+
+def test_format_answer_prefers_server_answer_for_sql():
+    text = _js()
+    assert 'typeof data.answer === "string" && data.answer' in text
+    assert "columns.map" not in text
+    assert 'mode === "sql"' in text
 
 
 def test_no_relative_api_fallback():

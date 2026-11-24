@@ -1,8 +1,9 @@
 """Shared ask flow: SQL first, then document RAG, then a fixed safe message.
 
 ``POST /ask`` and the public widget both call :func:`answer_question`. The response
-never includes SQL, schema text, prompts or database error details. Row values are
-untrusted data and are not fed back into an LLM here.
+never includes SQL, schema text, prompts or database error details. SQL mode includes
+a short natural-language ``answer`` built from the result rows (deterministic, with an
+optional low-temperature LLM rephrase that receives only the capped rows).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError
+from site_ai_widget.sqlqa.present import format_sql_answer_deterministic, present_sql_answer
 
 log = logging.getLogger("site_ai_widget")
 
@@ -38,11 +40,20 @@ class AskResponse(BaseModel):
     message: str | None = None
 
 
-def answer_question(company_id: str, question: str, *, sql_fn=None, docs_fn=None) -> AskResponse:
+def answer_question(
+    company_id: str,
+    question: str,
+    *,
+    lang: str | None = None,
+    sql_fn=None,
+    docs_fn=None,
+    present_fn=None,
+) -> AskResponse:
     """Try text-to-SQL; on failure fall back to document Q&A.
 
     ``company_id`` is chosen by the caller (the JWT on ``/ask``, the widget key
     on the public route). It is never taken from the question body.
+    ``lang`` is ``pt`` or ``en`` for the SQL answer phrasing (widget ``data-lang``).
     """
     settings = get_settings()
     max_chars = min(settings.max_question_chars, _HARD_QUESTION_CHARS)
@@ -63,6 +74,9 @@ def answer_question(company_id: str, question: str, *, sql_fn=None, docs_fn=None
         if docs_fn is None:
             docs_fn = docs_ask.ask_documents
 
+    if present_fn is None:
+        present_fn = present_sql_answer
+
     company_id = str(company_id)
     sql_answer = None
     try:
@@ -72,12 +86,20 @@ def answer_question(company_id: str, question: str, *, sql_fn=None, docs_fn=None
 
     if sql_answer is not None and sql_answer.status == "ok":
         rows = sql_answer.rows[:_MAX_SQL_ROWS]
+        columns = list(sql_answer.columns)
+        truncated = bool(sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS)
+        try:
+            answer = present_fn(columns, rows, lang, truncated=truncated)
+        except Exception as exc:
+            log.warning("ask/sql present failed: %s", type(exc).__name__)
+            answer = format_sql_answer_deterministic(columns, rows, lang, truncated=truncated)
         return AskResponse(
             mode="sql",
-            columns=list(sql_answer.columns),
+            columns=columns,
             rows=rows,
             row_count=min(sql_answer.row_count, len(rows)),
-            truncated=sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS,
+            truncated=truncated,
+            answer=answer,
         )
 
     try:

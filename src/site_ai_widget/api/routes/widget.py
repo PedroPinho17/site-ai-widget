@@ -64,7 +64,11 @@ def _origin(request: Request) -> str | None:
 def widget_ask(key: str, body: WidgetAskRequest, request: Request) -> WidgetAskResponse:
     record = authorize_widget(key, _origin(request))
     charge_widget_ask(request, record.id)
-    result = ask_service.answer_question(record.company_id, body.question)
+    result = ask_service.answer_question(
+        record.company_id,
+        body.question,
+        lang=body.lang,
+    )
     token, session_id = resolve_session(record.company_id, body.session_token)
     append_turn(session_id, record.company_id, (body.question or "").strip(), result)
     log.info("widget ask mode=%s key_prefix=%s", result.mode, _key_prefix(key))

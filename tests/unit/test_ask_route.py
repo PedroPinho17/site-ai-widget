@@ -88,7 +88,8 @@ def test_ask_sql_mode(ask_app, monkeypatch):
     assert body["rows"] == [["Azeite Atlas"]]
     assert body["row_count"] == 1
     assert body["truncated"] is False
-    assert body.get("answer") is None
+    assert body["answer"] == "Azeite Atlas"
+    assert "price" not in (body["answer"] or "")
     assert "SELECT" not in r.text
 
 
@@ -272,6 +273,9 @@ def test_500_row_cap(ask_app, monkeypatch):
     assert len(body["rows"]) == 500
     assert body["row_count"] == 500
     assert body["truncated"] is True
+    assert isinstance(body["answer"], str)
+    assert body["answer"].splitlines()[-1] == "and more than 490 more"
+    assert "SELECT" not in body["answer"]
 
 
 def test_response_never_contains_sql_or_select_sentinel(ask_app, monkeypatch):

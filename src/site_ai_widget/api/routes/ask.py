@@ -26,8 +26,8 @@ def ask(
     """Try text-to-SQL; on failure fall back to document Q&A.
 
     ``company_id`` comes only from the JWT (``current_user``). The response never
-    includes SQL, schema text, prompts or database error details. Row values are
-    untrusted data and are not fed back into an LLM here.
+    includes SQL, schema text, prompts or database error details. SQL mode includes
+    a short ``answer`` built from the result rows.
     """
     # Pass these globals through so tests can patch them on this module.
     return answer_question(
