@@ -276,14 +276,37 @@ def _escape_like_literal(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _stem_for_search(word: str) -> str:
+    """Singular-ish stem so ``queijos`` matches ``Queijo…`` via ILIKE ``%queijo%``.
+
+    Strips a trailing plural ``es`` / ``s`` when the word is long enough to stay
+    discriminative (``queijos`` → ``queijo``, ``cheeses`` → ``chees``).
+    """
+    text = word.strip()
+    folded = _fold(text)
+    # Prefer -es over -s (``boxes`` → ``box``); plain -s covers ``queijos`` → ``queijo``.
+    if len(folded) >= 6 and folded.endswith("es") and text.lower().endswith("es"):
+        return text[:-2]
+    if len(folded) >= 5 and folded.endswith("s") and not folded.endswith("ss") and text.lower().endswith(
+        "s"
+    ):
+        return text[:-1]
+    return text
+
+
+def _like_pattern_for_word(word: str) -> str:
+    stem = _stem_for_search(word)
+    return f"%{_escape_like_literal(stem)}%"
+
+
 def _relax_text_match(sql: str, question: str) -> str | None:
     """Turn ``lower(col) = 'word'`` into accent-insensitive ILIKE for typed words.
 
-    A shop question names part of a product (``azeite``); the stored name is longer
-    and may use different accents (``Pão`` vs ``pao``). Only WHERE filters whose
-    literal the visitor typed change; ``%``, ``_`` and backslash in the word are
-    escaped so they match literally. Returns None when there is nothing to relax.
-    Never logs the SQL.
+    A shop question names part of a product (``azeite`` / ``queijos``); the stored
+    name is longer and may use different accents or the singular. Only WHERE
+    filters whose literal the visitor typed change; ``%``, ``_`` and backslash in
+    the word are escaped so they match literally. Returns None when there is
+    nothing to relax. Never logs the SQL.
     """
     tree = _parse(sql)
     if tree is None:
@@ -292,8 +315,7 @@ def _relax_text_match(sql: str, question: str) -> str | None:
     for eq, column, text in _text_equalities(tree):
         if not _typed_by_visitor(text, question):
             continue
-        escaped = _escape_like_literal(text)
-        eq.replace(_ilike_unaccent(column, f"%{escaped}%"))
+        eq.replace(_ilike_unaccent(column, _like_pattern_for_word(text)))
         changed = True
     if not changed:
         return None
@@ -301,12 +323,15 @@ def _relax_text_match(sql: str, question: str) -> str | None:
 
 
 def _ilike_pattern_text(node: exp.Expression) -> str | None:
-    """String pattern of an ILIKE right-hand side (literal or ``lower('…')``)."""
-    text = _string_literal(node)
+    """String pattern of an ILIKE RHS (literal, ``lower('…')``, or ``unaccent(lower('…'))``)."""
+    current: exp.Expression = node
+    if _is_unaccent_call(current) and current.expressions:
+        current = current.expressions[0]
+    text = _string_literal(current)
     if text is not None:
         return text
-    if isinstance(node, exp.Literal) and node.is_string:
-        return node.this
+    if isinstance(current, exp.Literal) and current.is_string:
+        return current.this
     return None
 
 
@@ -320,8 +345,13 @@ def _ilike_column(node: exp.Expression) -> exp.Column | None:
     return current if isinstance(current, exp.Column) else None
 
 
-def _unaccent_text_match(sql: str, question: str) -> str | None:
-    """Wrap plain ``col ILIKE '%word%'`` with ``unaccent(lower(...))`` for typed words."""
+def _rewrite_ilike_filters(sql: str, question: str, *, require_plain: bool) -> str | None:
+    """Rewrite typed ILIKE filters to unaccent + singular stem.
+
+    When ``require_plain`` is true, only rewrite filters that are not already
+    wrapped in ``unaccent`` (first pass). When false, also re-stem patterns that
+    already use ``unaccent`` (``%queijos%`` → ``%queijo%``).
+    """
     tree = _parse(sql)
     if tree is None:
         return None
@@ -329,7 +359,8 @@ def _unaccent_text_match(sql: str, question: str) -> str | None:
     for ilike in tree.find_all(exp.ILike):
         if not _in_where_filter(ilike):
             continue
-        if _is_unaccent_call(ilike.this):
+        already = _is_unaccent_call(ilike.this)
+        if require_plain and already:
             continue
         pattern = _ilike_pattern_text(ilike.expression)
         if pattern is None:
@@ -340,11 +371,24 @@ def _unaccent_text_match(sql: str, question: str) -> str | None:
         column = _ilike_column(ilike.this)
         if column is None:
             continue
-        ilike.replace(_ilike_unaccent(column, pattern))
+        new_pattern = _like_pattern_for_word(core)
+        if already and new_pattern == pattern:
+            continue
+        ilike.replace(_ilike_unaccent(column, new_pattern))
         changed = True
     if not changed:
         return None
     return tree.sql(dialect="postgres")
+
+
+def _unaccent_text_match(sql: str, question: str) -> str | None:
+    """Wrap plain ``col ILIKE '%word%'`` with ``unaccent(lower(...))`` for typed words."""
+    return _rewrite_ilike_filters(sql, question, require_plain=True)
+
+
+def _stem_ilike_match(sql: str, question: str) -> str | None:
+    """Singularize typed ILIKE patterns (``%queijos%`` → ``%queijo%``) with unaccent."""
+    return _rewrite_ilike_filters(sql, question, require_plain=False)
 
 
 def _strip_unaccent_calls(sql: str) -> str | None:
@@ -415,6 +459,7 @@ def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str,
     candidates = (
         _relax_text_match(sql, question),
         _unaccent_text_match(sql, question),
+        _stem_ilike_match(sql, question),
     )
     tried = False
     for relaxed in candidates:

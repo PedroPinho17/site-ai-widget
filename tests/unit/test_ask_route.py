@@ -273,7 +273,7 @@ def test_500_row_cap(ask_app, monkeypatch):
     assert body["row_count"] == 500
     assert body["truncated"] is True
     assert isinstance(body["answer"], str)
-    assert body["answer"].splitlines()[-1] == "and more than 490 more"
+    assert body["answer"].splitlines()[-1] == "and more than 490 more items"
     assert "SELECT" not in body["answer"]
 
 

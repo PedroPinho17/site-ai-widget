@@ -11,6 +11,13 @@ describe("safe markdown", () => {
     );
   });
 
+  it("keeps the space between a street name and its number", () => {
+    expect(stripCitations("Rua das Amendoeiras [1]48, Lisboa")).toBe(
+      "Rua das Amendoeiras 48, Lisboa",
+    );
+    expect(stripCitations("Rua das Amendoeiras【1】48")).toBe("Rua das Amendoeiras 48");
+  });
+
   it("renders bold and lists without HTML injection", () => {
     render(
       <SafeMarkdown text={"**Contacte-nos** no telemóvel.\n- Rua das Flores\n- Lisboa\n【1】"} />,

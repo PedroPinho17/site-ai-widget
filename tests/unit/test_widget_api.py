@@ -379,8 +379,9 @@ def test_same_session_history_is_oldest_first(client):
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["mode"] == "sql"
     # History stores the same visitor-facing answer the ask response returned.
+    # No lang in the request → company widget locale (pt) labels the column.
     assert messages[-1]["text"] == second.json()["answer"]
-    assert messages[-1]["text"] == "name: Azeite"
+    assert messages[-1]["text"] == "nome: Azeite"
     assert "SELECT" not in (messages[-1]["text"] or "")
     assert messages[-1]["text"] != "price"
 

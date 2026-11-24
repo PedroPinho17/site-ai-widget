@@ -37,6 +37,10 @@ _SYSTEM = (
     "with unaccent(lower(alias.column)) ILIKE unaccent(lower('%word%')), not with = or "
     "lower(column) = 'word': stored names are longer than the words in the question and "
     "may differ in accents (pão vs pao). "
+    "Catalog questions (que X têm, têm X, quais X, what X do you have) must SELECT from "
+    "products (name, price) and/or categories — never answer those with NO_SQL when those "
+    "tables are listed. Use a singular stem in the pattern (queijos → %queijo%, cheeses → "
+    "%cheese%) so plurals still match product names. "
     "For multi-word names (e.g. pão de milho), require each key word with AND "
     "(unaccent(lower(name)) ILIKE unaccent(lower('%pão%')) AND "
     "unaccent(lower(name)) ILIKE unaccent(lower('%milho%'))). "
@@ -75,8 +79,9 @@ RETRY_HINTS: dict[str, str] = {
     "db_error": "write a simpler read-only query that the database can run",
     "no_rows": "the last query returned no rows; match text with "
     "unaccent(lower(col)) ILIKE unaccent(lower('%word%')), not with =; "
-    "for several words use AND of those patterns; join stock on product_id = products.id; "
-    "drop unnecessary joins and try a simpler SELECT",
+    "use a singular stem (queijos → %queijo%); for several words use AND of those "
+    "patterns; search products.name or categories.name; join stock on "
+    "product_id = products.id; drop unnecessary joins and try a simpler SELECT",
 }
 GENERIC_RETRY_HINT = "follow every rule above"
 _HINT_VALUES = frozenset(RETRY_HINTS.values()) | {GENERIC_RETRY_HINT}

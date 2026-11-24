@@ -68,7 +68,11 @@ def answer_question(
     if len(question) > max_chars:
         raise ApiError("question_too_long", 422, n=max_chars)
 
-    reply = small_talk_reply(question, lang)
+    company_id = str(company_id)
+    # Widget data-lang, Test assistant body.lang, or the company widget locale.
+    effective_lang = lang or _company_locale(company_id)
+
+    reply = small_talk_reply(question, effective_lang)
     if reply is not None:
         log.info("ask/sql stage=greeting")
         return AskResponse(mode="chat", answer=reply, elapsed_ms=_elapsed(started))
@@ -87,7 +91,6 @@ def answer_question(
     if present_fn is None:
         present_fn = present_sql_answer
 
-    company_id = str(company_id)
     sql_answer = None
     try:
         sql_answer = sql_fn(company_id, question)
@@ -102,33 +105,45 @@ def answer_question(
             sql_answer.status,
             sql_answer.row_count,
         )
+    elif not sql_answer.rows:
+        # Catalog miss: try documents next (same as refused / no_sql).
+        log.info("ask/sql stage=skip status=ok rows=0")
     else:
         log.info("ask/sql stage=present rows=%s", len(sql_answer.rows))
 
-    if sql_answer is not None and sql_answer.status == "ok":
+    if sql_answer is not None and sql_answer.status == "ok" and sql_answer.rows:
         rows = sql_answer.rows[:_MAX_SQL_ROWS]
         columns = list(sql_answer.columns)
         truncated = bool(sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS)
         currency = _company_currency(company_id)
+        # "e mais N produtos" only for product lists; stores or categories are "resultados".
+        tables = list(getattr(sql_answer, "tables", []) or [])
+        products = not tables or "products" in tables
         log.info(
             "ask/sql stage=present rows=%s lang=%s currency=%s",
             len(rows),
-            lang or "en",
+            effective_lang or "en",
             bool(currency),
         )
         try:
             answer = present_fn(
                 columns,
                 rows,
-                lang,
+                effective_lang,
                 truncated=truncated,
                 question=question,
                 currency=currency,
+                products=products,
             )
         except Exception as exc:
             log.info("ask/sql stage=fallback reason=present_error error=%s", type(exc).__name__)
             answer = format_sql_answer_deterministic(
-                columns, rows, lang, truncated=truncated, currency=currency
+                columns,
+                rows,
+                effective_lang,
+                truncated=truncated,
+                currency=currency,
+                products=products,
             )
         return AskResponse(
             mode="sql",
@@ -181,3 +196,26 @@ def _company_currency(company_id: str) -> str | None:
     if not row or not row[0]:
         return None
     return str(row[0])
+
+
+def _company_locale(company_id: str) -> str | None:
+    """Widget language from settings (``pt`` / ``en``). Used when the client omits lang."""
+    try:
+        from site_ai_widget.db.pool import connection
+
+        with connection() as conn:
+            row = conn.execute(
+                "SELECT locale FROM widget_settings WHERE company_id = %s",
+                (str(company_id),),
+            ).fetchone()
+    except Exception:
+        log.info("ask/sql stage=locale status=unavailable")
+        return None
+    if not row or not row[0]:
+        return None
+    raw = str(row[0]).strip().lower()
+    if raw.startswith("pt"):
+        return "pt"
+    if raw.startswith("en"):
+        return "en"
+    return None

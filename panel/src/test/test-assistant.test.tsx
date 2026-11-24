@@ -81,8 +81,13 @@ describe("test assistant page", () => {
     expect(screen.getByText("42 ms")).toBeInTheDocument();
     expect(screen.queryByText("A escrever…")).not.toBeInTheDocument();
 
-    const posted = fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/assistant/test"));
-    expect(posted).toBe(true);
+    const posted = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/assistant/test"));
+    expect(posted).toBeTruthy();
+    // No lang from the panel: the API uses the company widget locale, so the
+    // panel UI language and the settings loading state cannot change answers.
+    expect(JSON.parse(String((posted?.[1] as RequestInit).body))).toEqual({
+      question: "Qual o preço do azeite?",
+    });
 
     await user.click(screen.getByRole("button", { name: "Clear chat" }));
     await waitFor(() => {

@@ -33,15 +33,29 @@ _FOUND_N = {
     "pt": lambda n: "Encontrei 1 resultado." if n == 1 else f"Encontrei {n} resultados.",
     "en": lambda n: "I found 1 result." if n == 1 else f"I found {n} results.",
 }
-_MORE = {
-    "pt": "e mais {n}",
-    "en": "and {n} more",
+
+
+_MORE_NOUN = {
+    ("pt", True): ("produto", "produtos"),
+    ("pt", False): ("resultado", "resultados"),
+    ("en", True): ("item", "items"),
+    ("en", False): ("result", "results"),
 }
-# The result was cut at the row cap, so the real remainder is larger.
-_MORE_TRUNCATED = {
-    "pt": "e mais de {n}",
-    "en": "and more than {n} more",
-}
+
+
+def _more_label(n: int, lang: Lang, *, truncated: bool, products: bool) -> str:
+    """ "e mais 1 produto" / "e mais N produtos"; other lists say "resultados".
+
+    ``truncated`` means the result was cut at the row cap, so the real remainder
+    is larger ("e mais de N").
+    """
+    one, many = _MORE_NOUN[(lang, products)]
+    unit = one if n == 1 else many
+    if lang == "pt":
+        return f"e mais de {n} {unit}" if truncated else f"e mais {n} {unit}"
+    return f"and more than {n} more {unit}" if truncated else f"and {n} more {unit}"
+
+
 _WS = re.compile(r"\s+")
 # Numbers, links and e-mail addresses in an LLM answer must come from the rows.
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
@@ -276,11 +290,15 @@ def format_row(
     return f"{head}: {rest}"
 
 
-def _more_line(rows: list[list[Any]], locale: Lang, truncated: bool) -> str | None:
+def _more_line(
+    rows: list[list[Any]], locale: Lang, truncated: bool, *, products: bool = True
+) -> str | None:
+    """``products`` is False when the query did not read the products table, so a
+    list of stores or categories says "e mais N resultados", not "produtos"."""
     extra = len(rows) - _MAX_LIST_LINES
     if extra <= 0:
         return None
-    return (_MORE_TRUNCATED if truncated else _MORE)[locale].format(n=extra)
+    return _more_label(extra, locale, truncated=truncated, products=products)
 
 
 def format_sql_answer_deterministic(
@@ -289,6 +307,7 @@ def format_sql_answer_deterministic(
     lang: str | None,
     *,
     truncated: bool = False,
+    products: bool = True,
     currency: str | None = None,
 ) -> str:
     locale = normalize_lang(lang)
@@ -305,7 +324,7 @@ def format_sql_answer_deterministic(
         # Rows came back, but every column was hidden (id / *_id). That is not
         # "nothing found": say how many results there are, without the ids.
         return _FOUND_N[locale](len(rows))
-    more = _more_line(rows, locale, truncated)
+    more = _more_line(rows, locale, truncated, products=products)
     if more:
         lines.append(more)
     return "\n".join(lines)
@@ -478,6 +497,7 @@ def present_sql_answer(
     lang: str | None,
     *,
     truncated: bool = False,
+    products: bool = True,
     question: str | None = None,
     currency: str | None = None,
     llm_complete: Callable[..., str] | None = None,
@@ -489,7 +509,7 @@ def present_sql_answer(
     """
     locale = normalize_lang(lang)
     fallback = format_sql_answer_deterministic(
-        columns, rows, locale, truncated=truncated, currency=currency
+        columns, rows, locale, truncated=truncated, currency=currency, products=products
     )
     row_count = len(rows)
     if not rows:
@@ -547,7 +567,7 @@ def present_sql_answer(
         return fallback
 
     text = (raw or "").strip()
-    more = _more_line(rows, locale, truncated)
+    more = _more_line(rows, locale, truncated, products=products)
     shown = fallback if more is None else fallback.rsplit("\n", 1)[0]
     reason = _llm_answer_fail(text, fallback=shown, payload=payload, currency=currency)
     if reason is not None:

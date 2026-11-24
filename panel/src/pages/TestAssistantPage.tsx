@@ -55,7 +55,7 @@ export function TestAssistantPage() {
     setBusy(true);
     setError("");
     try {
-      const data = await testAssistantRequest(trimmed, "pt");
+      const data = await testAssistantRequest(trimmed);
       setMessages((current) => [
         ...current,
         {

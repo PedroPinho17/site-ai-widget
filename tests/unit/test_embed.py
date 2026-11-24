@@ -422,7 +422,8 @@ def test_markdown_renders_html_in_replies_as_plain_text_and_tidies_citations():
         + "\nvar evil = '<img src=x onerror=alert(1)> **<script>x</script>**\\n- <b>Rua</b>';\n"
         + "var out = renderSafeMarkdown(evil);\n"
         + "process.stdout.write(JSON.stringify({made: made, text: text(out), "
-        + "tidy: stripCitations('Abrimos às 9h 【1】 e aos sábados [2].')}));"
+        + "tidy: stripCitations('Abrimos às 9h 【1】 e aos sábados [2].'), "
+        + "address: stripCitations('Rua das Amendoeiras [1]48, Lisboa')}));"
     )
     result = subprocess.run(
         [shutil.which("node"), "-e", script],
@@ -439,3 +440,4 @@ def test_markdown_renders_html_in_replies_as_plain_text_and_tidies_citations():
     assert "<script>x</script>" in body["text"]
     assert "<b>Rua</b>" in body["text"]
     assert body["tidy"] == "Abrimos às 9h e aos sábados."
+    assert body["address"] == "Rua das Amendoeiras 48, Lisboa"

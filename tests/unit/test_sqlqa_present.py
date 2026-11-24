@@ -122,16 +122,26 @@ def test_several_rows_capped_with_more_pt():
     rows = [[f"Produto {i}", float(i)] for i in range(1, 14)]
     text = format_sql_answer_deterministic(["name", "price"], rows, "pt")
     lines = text.splitlines()
-    assert len(lines) == 11  # 10 items + "e mais 3"
+    assert len(lines) == 11  # 10 items + "e mais 3 produtos"
     assert lines[0].startswith("Produto 1 —")
-    assert lines[-1] == "e mais 3"
+    assert lines[-1] == "e mais 3 produtos"
     assert "SELECT" not in text
 
 
 def test_several_rows_more_en():
     rows = [[f"Item {i}"] for i in range(12)]
     text = format_sql_answer_deterministic(["name"], rows, "en")
-    assert text.splitlines()[-1] == "and 2 more"
+    assert text.splitlines()[-1] == "and 2 more items"
+
+
+def test_more_line_singular_pt_and_en():
+    rows = [[f"Item {i}"] for i in range(11)]
+    assert format_sql_answer_deterministic(["name"], rows, "pt").splitlines()[-1] == (
+        "e mais 1 produto"
+    )
+    assert format_sql_answer_deterministic(["name"], rows, "en").splitlines()[-1] == (
+        "and 1 more item"
+    )
 
 
 def test_no_rows_pt_and_en():
@@ -312,9 +322,9 @@ def test_count_like_columns_do_not_get_money_layout(column):
 def test_truncated_result_says_more_than():
     rows = [[f"Produto {i}"] for i in range(500)]
     pt = format_sql_answer_deterministic(["name"], rows, "pt", truncated=True)
-    assert pt.splitlines()[-1] == "e mais de 490"
+    assert pt.splitlines()[-1] == "e mais de 490 produtos"
     en = format_sql_answer_deterministic(["name"], rows, "en", truncated=True)
-    assert en.splitlines()[-1] == "and more than 490 more"
+    assert en.splitlines()[-1] == "and more than 490 more items"
 
 
 def test_cell_newlines_cannot_fake_list_lines():
@@ -334,7 +344,7 @@ def test_llm_gets_only_ten_rows_and_answer_keeps_more_line():
     assert "Produto 9" in seen[0]
     assert "Produto 10" not in seen[0]
     assert text.startswith("Temos Produto 0")
-    assert text.splitlines()[-1] == "e mais 3"
+    assert text.splitlines()[-1] == "e mais 3 produtos"
 
 
 @pytest.mark.parametrize(

@@ -61,8 +61,8 @@ def test_test_chat_is_company_scoped_and_not_stored(assistant_app, monkeypatch):
         price = "8.49" if str(company_id) == str(users["a"]["company_id"]) else "1.00"
         return SqlAnswer(
             status="ok",
-            columns=["price"],
-            rows=[[price]],
+            columns=["name", "price"],
+            rows=[["Azeite", price]],
             row_count=1,
             truncated=False,
             attempts=1,
@@ -74,6 +74,8 @@ def test_test_chat_is_company_scoped_and_not_stored(assistant_app, monkeypatch):
 
     monkeypatch.setattr("site_ai_widget.api.routes.assistant.answer_with_sql", fake_sql)
     monkeypatch.setattr("site_ai_widget.widget.access.append_turn", refuse_store)
+    monkeypatch.setattr("site_ai_widget.ask_service._company_currency", lambda cid: "EUR")
+    monkeypatch.setattr("site_ai_widget.ask_service._company_locale", lambda cid: "pt")
 
     holder["who"] = "a"
     first = client.post("/assistant/test", json={"question": "Qual o preço do azeite?", "lang": "pt"})
@@ -81,14 +83,25 @@ def test_test_chat_is_company_scoped_and_not_stored(assistant_app, monkeypatch):
     body = first.json()
     assert body["mode"] == "sql"
     assert body["tables"] == ["products"]
-    assert "8,49" in body["answer"] or "8.49" in body["answer"]
+    assert "8,49 €" in body["answer"]
+    assert "8.49" not in body["answer"]
     assert "SELECT" not in first.text
+
+    # Omitting lang still uses the company widget locale (pt), like the embed data-lang.
+    omitted = client.post("/assistant/test", json={"question": "Qual o preço do azeite?"})
+    assert omitted.status_code == 200
+    assert "8,49 €" in omitted.json()["answer"]
+    assert "8.49" not in omitted.json()["answer"]
 
     holder["who"] = "b"
     second = client.post("/assistant/test", json={"question": "Qual o preço do azeite?", "lang": "pt"})
     assert second.status_code == 200
     assert second.json()["answer"] != body["answer"]
-    assert seen == [str(users["a"]["company_id"]), str(users["b"]["company_id"])]
+    assert seen == [
+        str(users["a"]["company_id"]),
+        str(users["a"]["company_id"]),
+        str(users["b"]["company_id"]),
+    ]
 
 
 def test_greeting_on_test_endpoint_has_no_sources(assistant_app, monkeypatch):

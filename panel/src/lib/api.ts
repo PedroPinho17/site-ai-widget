@@ -348,10 +348,14 @@ export type AssistantTestResponse = {
   elapsed_ms?: number | null;
 };
 
-export function testAssistantRequest(question: string, lang: "pt" | "en"): Promise<AssistantTestResponse> {
+/**
+ * No ``lang``: the API answers in the company widget locale (the same rule the
+ * widget follows), so the panel UI language and loading state never leak in.
+ */
+export function testAssistantRequest(question: string): Promise<AssistantTestResponse> {
   return api("/assistant/test", {
     method: "POST",
-    body: JSON.stringify({ question, lang }),
+    body: JSON.stringify({ question }),
   });
 }
 

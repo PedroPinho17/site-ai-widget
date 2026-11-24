@@ -10,6 +10,8 @@ from site_ai_widget.sqlqa.generator import RETRY_HINTS, retry_hint
 from site_ai_widget.sqlqa.pipeline import (
     SqlAnswer,
     _relax_text_match,
+    _stem_for_search,
+    _stem_ilike_match,
     _strip_unaccent_calls,
     _unaccent_text_match,
     answer_with_sql,
@@ -563,8 +565,8 @@ def test_empty_join_retries_once_with_simpler_hint(monkeypatch):
     assert out.row_count == 1
     assert out.rows == [["Pão de milho", 18]]
     assert previous[1] == retry_hint("no_rows")
-    # original empty + unaccent wrap retry + LLM rewrite with AND patterns
-    assert runs["n"] == 3
+    # original empty + unaccent wrap + stem rewrite + LLM rewrite with AND patterns
+    assert runs["n"] == 4
 
 
 def test_no_rows_retry_runs_at_most_once(monkeypatch):
@@ -643,6 +645,51 @@ def test_plain_ilike_is_wrapped_with_unaccent_for_typed_words():
     assert "UNACCENT(LOWER('%pao%'))" in wrapped
     assert "UNACCENT(LOWER('%milho%'))" in wrapped
     assert "s.product_id = p.id" in wrapped
+
+
+def test_plural_stem_matches_singular_product_names():
+    assert _stem_for_search("queijos") == "queijo"
+    stemmed = _stem_ilike_match(
+        "SELECT p.name, p.price FROM products AS p "
+        "WHERE UNACCENT(LOWER(p.name)) ILIKE UNACCENT(LOWER('%queijos%')) LIMIT 10",
+        "Que queijos têm?",
+    )
+    assert stemmed is not None
+    assert "UNACCENT(LOWER('%queijo%'))" in stemmed
+    assert "%queijos%" not in stemmed
+
+
+def test_catalog_plural_empty_result_is_restemmed(monkeypatch):
+    """``ILIKE '%queijos%'`` matches nothing; stem retry finds Queijo da Serra."""
+    sql = (
+        "SELECT p.name, p.price FROM products AS p "
+        "WHERE p.name ILIKE '%queijos%' LIMIT 10"
+    )
+    ran: list[str] = []
+
+    def run(query, **kwargs):
+        ran.append(query)
+        if "%queijo%" in query.lower() and "unaccent" in query.lower():
+            return RunResult(
+                columns=["name", "price"],
+                rows=[["Queijo da Serra da Estrela 200 g", "9.90"]],
+                row_count=1,
+                truncated=False,
+                elapsed_ms=1,
+            )
+        return RunResult(
+            columns=["name", "price"], rows=[], row_count=0, truncated=False, elapsed_ms=1
+        )
+
+    monkeypatch.setattr(pipeline, "generate_sql", lambda *a, **k: sql)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda query, allowed: query)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Que queijos têm?")
+    assert out.status == "ok"
+    assert out.row_count == 1
+    assert out.rows[0][0].startswith("Queijo")
+    assert any("%queijo%" in q.lower() for q in ran)
 
 
 def test_strip_unaccent_leaves_lower_ilike():
@@ -728,3 +775,12 @@ def test_unaccent_rewrite_keeps_quotes_escaped_and_passes_the_real_validator():
     validated = real_validate(rewritten, ALLOWED)
     assert "LIMIT 10" in validated.upper()
     assert "INSERT" not in validated.upper()
+
+
+def test_plain_plural_word_is_still_stemmed():
+    from site_ai_widget.sqlqa.pipeline import _unaccent_text_match
+
+    sql = "SELECT p.name FROM products AS p WHERE p.name ILIKE '%queijos%' LIMIT 10"
+    out = _unaccent_text_match(sql, "Que queijos têm?")
+    assert out is not None
+    assert "'%queijo%'" in out

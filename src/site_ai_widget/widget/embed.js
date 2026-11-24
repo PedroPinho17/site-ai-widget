@@ -130,8 +130,10 @@
   }
 
   function stripCitations(text) {
+    /* Replace markers with a space so "Amendoeiras [1]48" stays "Amendoeiras 48". */
     return String(text || "")
-      .replace(/[ \t]*(?:【\d+】|\[\d+\])/g, "")
+      .replace(/[ \t]*(?:【\d+】|\[\d+\])[ \t]*/g, " ")
+      .replace(/[ \t]+([.,;:!?])/g, "$1")
       .replace(/[ \t]{2,}/g, " ")
       .replace(/[ \t]+\n/g, "\n")
       .trim();
