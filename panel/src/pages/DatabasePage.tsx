@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 
 import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/ui/button";
@@ -19,16 +19,17 @@ import {
   type SchemaTable,
   type SslMode,
 } from "@/lib/api";
+import { buildDbConnectionPayload, type ConnectionForm } from "@/lib/db-connection";
 
 const SSL_MODES: SslMode[] = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"];
 
-const EMPTY_FORM = {
+const EMPTY_FORM: ConnectionForm = {
   host: "",
   port: "5432",
   database: "",
   username: "",
   password: "",
-  sslmode: "prefer" as SslMode,
+  sslmode: "prefer",
 };
 
 function tableKey(table: SchemaTable): string {
@@ -50,11 +51,23 @@ function statusLabel(connection: DbConnection | undefined): string {
   return connection.status;
 }
 
+function formFromConnection(conn: DbConnection): ConnectionForm {
+  return {
+    host: conn.host,
+    port: String(conn.port),
+    database: conn.database,
+    username: conn.username,
+    password: "", // never fill from the API
+    sslmode: SSL_MODES.includes(conn.sslmode) ? conn.sslmode : "prefer",
+  };
+}
+
 export function DatabasePage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
+  const [formSource, setFormSource] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
@@ -68,6 +81,7 @@ export function DatabasePage() {
       try {
         return await getDbConnectionRequest();
       } catch (err) {
+        // First visit: no row yet. Treat as empty, not an error state.
         if (err instanceof ApiRequestError && err.status === 404) {
           return null;
         }
@@ -95,6 +109,15 @@ export function DatabasePage() {
     setSelected(
       new Set(presentTables.filter((table) => table.status === "approved").map((table) => table.id)),
     );
+  }
+
+  // Prefill host/port/database/user when a connection loads; never the password.
+  const connectionKey = connection.data
+    ? `${connection.data.host}|${connection.data.port}|${connection.data.database}|${connection.data.username}|${connection.data.sslmode}`
+    : "";
+  if (connection.data && connectionKey !== formSource) {
+    setFormSource(connectionKey);
+    setForm(formFromConnection(connection.data));
   }
 
   const filtered = useMemo(() => {
@@ -180,22 +203,25 @@ export function DatabasePage() {
 
   function onSaveConnection(event: FormEvent) {
     event.preventDefault();
-    const port = Number(form.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setError(messageForCode("db_host_invalid"));
+    const built = buildDbConnectionPayload(form, connection.data);
+    if (!built.ok) {
+      setError(messageForCode(built.code));
       return;
     }
-    if (!form.password) {
-      setError("Enter the database password to save the connection.");
+    saveConnection.mutate(built.body);
+  }
+
+  // A ref, not isPending: two clicks in the same render must still send one request.
+  const reloadInFlight = useRef(false);
+  function onReloadSchema() {
+    if (reloadInFlight.current) {
       return;
     }
-    saveConnection.mutate({
-      host: form.host.trim(),
-      port,
-      database: form.database.trim(),
-      username: form.username.trim(),
-      password: form.password,
-      sslmode: form.sslmode,
+    reloadInFlight.current = true;
+    reloadSchema.mutate(undefined, {
+      onSettled: () => {
+        reloadInFlight.current = false;
+      },
     });
   }
 
@@ -228,6 +254,7 @@ export function DatabasePage() {
   }
 
   const approvedCount = presentTables.filter((table) => table.status === "approved").length;
+  const hasConnection = Boolean(connection.data);
 
   return (
     <div className="flex flex-col gap-6">
@@ -249,7 +276,7 @@ export function DatabasePage() {
         {connection.isLoading ? (
           <p className="mt-2 text-sm text-muted-foreground">Loading connection…</p>
         ) : null}
-        {connection.error instanceof ApiRequestError ? (
+        {connection.isError && connection.error instanceof ApiRequestError ? (
           <p role="alert" className="mt-2 text-sm text-destructive">
             {connection.error.message}
           </p>
@@ -272,7 +299,7 @@ export function DatabasePage() {
               <span className="text-muted-foreground">Status:</span> {statusLabel(connection.data)}
             </p>
           </div>
-        ) : connection.data === null ? (
+        ) : connection.data === null && !connection.isLoading ? (
           <p className="mt-2 text-sm text-muted-foreground">No connection saved yet.</p>
         ) : null}
 
@@ -322,7 +349,8 @@ export function DatabasePage() {
                 type="password"
                 value={form.password}
                 onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
-                required
+                required={!hasConnection}
+                placeholder={hasConnection ? "Leave blank to keep current" : undefined}
                 autoComplete="new-password"
               />
             </div>
@@ -350,7 +378,7 @@ export function DatabasePage() {
               <Button
                 type="button"
                 variant="outline"
-                disabled={!connection.data || testConnection.isPending}
+                disabled={!hasConnection || testConnection.isPending}
                 onClick={() => testConnection.mutate()}
               >
                 {testConnection.isPending ? "Testing…" : "Test connection"}
@@ -372,8 +400,8 @@ export function DatabasePage() {
             <Button
               type="button"
               variant="outline"
-              disabled={!connection.data || reloadSchema.isPending}
-              onClick={() => reloadSchema.mutate()}
+              disabled={!hasConnection || reloadSchema.isPending}
+              onClick={onReloadSchema}
             >
               {reloadSchema.isPending ? "Reloading…" : "Reload schema"}
             </Button>

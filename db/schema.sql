@@ -143,6 +143,8 @@ CREATE TABLE db_connections (
     last_error           text,
     last_checked_at      timestamptz,
     last_introspected_at timestamptz,
+    sslmode              text NOT NULL DEFAULT 'prefer'
+                         CHECK (sslmode IN ('disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full')),
     created_at           timestamptz NOT NULL DEFAULT now(),
     updated_at           timestamptz NOT NULL DEFAULT now()
 );

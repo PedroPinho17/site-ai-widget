@@ -236,12 +236,31 @@ class DbConnectionSave(BaseModel):
     port: int = Field(default=5432, ge=1, le=65535)
     database: str = Field(min_length=1, max_length=63)
     username: str = Field(min_length=1, max_length=63)
-    password: str = Field(min_length=1, max_length=200, repr=False)
+    # Optional on re-save: omit or send "" to keep the stored password. Only
+    # allowed when host, port, database and user are unchanged and sslmode is
+    # not weaker, so a stored secret can never be sent to a new server.
+    password: str | None = Field(default=None, max_length=200, repr=False)
     sslmode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
 
-    @field_validator("host", "database", "username", "password")
+    @field_validator("host", "database", "username")
     @classmethod
     def no_control_chars(cls, value: str) -> str:
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError("control characters are not allowed")
+        return value
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def empty_password_is_omit(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def password_no_control_chars(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
             raise ValueError("control characters are not allowed")
         return value
@@ -259,6 +278,8 @@ class DbConnectionResponse(BaseModel):
     last_checked_at: datetime | None = None
     last_introspected_at: datetime | None = None
     readable_tables: int | None = None
+    # Not a secret: returned so the panel can show it and re-save it unchanged.
+    sslmode: Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
 
 
 class SchemaApprovalUpdate(BaseModel):

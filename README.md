@@ -288,9 +288,9 @@ RUN_MODEL_TESTS=1 uv run pytest tests -m model -q
 | GET | `/documents` | list |
 | GET | `/documents/{id}` | detail + chunk count |
 | DELETE | `/documents/{id}` | admin; removes file + chunks |
-| GET/PUT | `/db-connection` | saved client DB (password never returned) |
+| GET/PUT | `/db-connection` | saved client DB (password never returned; a re-save may omit it only for the same host, port, database and user, with `sslmode` no weaker) |
 | POST | `/db-connection/test` | re-test saved connection |
-| POST | `/db-connection/introspect` | reload client schema |
+| POST | `/db-connection/introspect` | reload client schema (30 per 10 min per company and per IP) |
 | GET | `/db-connection/schema` | introspected tables/columns |
 | PUT | `/db-connection/schema/approval` | approve tables for the widget |
 | POST | `/ask` | SQL first, then docs RAG (`mode`: `sql` / `docs` / `none`) |

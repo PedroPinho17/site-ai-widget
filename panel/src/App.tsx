@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AuthProvider } from "@/auth/AuthProvider";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { AppLayout } from "@/layout/AppLayout";
+import { createQueryClient } from "@/lib/query-client";
 import { ComingSoonPage } from "@/pages/ComingSoonPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { DatabasePage } from "@/pages/DatabasePage";
@@ -11,11 +12,7 @@ import { DocumentsPage } from "@/pages/DocumentsPage";
 import { KeysPage } from "@/pages/KeysPage";
 import { LoginPage } from "@/pages/LoginPage";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: false, refetchOnWindowFocus: false },
-  },
-});
+const queryClient = createQueryClient();
 
 export function AppRoutes() {
   return (

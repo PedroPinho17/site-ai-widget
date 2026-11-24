@@ -44,6 +44,7 @@ const SAFE_BY_CODE: Record<string, string> = {
   db_timeout: "The database took too long to answer.",
   db_busy: "Too many database checks are running. Try again shortly.",
   db_schema_invalid: "The database sent invalid schema details.",
+  db_password_required: "Enter the database password to change the connection.",
   db_conflict_retry: "Another change conflicted. Try again.",
   schema_not_present: "That table no longer exists in your database.",
   column_sensitive: "A sensitive column cannot be approved.",
@@ -169,6 +170,7 @@ export type DbConnection = {
   last_checked_at: string | null;
   last_introspected_at: string | null;
   readable_tables?: number | null;
+  sslmode: SslMode;
 };
 
 export type SslMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
@@ -178,7 +180,8 @@ export type DbConnectionSaveBody = {
   port: number;
   database: string;
   username: string;
-  password: string;
+  /** Omit on re-save to keep the stored password. */
+  password?: string;
   sslmode: SslMode;
 };
 

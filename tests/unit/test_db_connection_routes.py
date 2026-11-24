@@ -278,6 +278,134 @@ def test_probe_rate_limit_is_also_per_ip(client):
     assert client.put(URL, json=body(port=5435), headers=headers_b).status_code == 429
 
 
+def test_introspect_has_its_own_limit_separate_from_probe(client):
+    headers, _ = register(client)
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+    # Exhaust the probe bucket with failing saves.
+    for _ in range(9):
+        assert client.put(URL, json=body(port=5435), headers=headers).status_code == 422
+    assert client.put(URL, json=body(port=5435), headers=headers).status_code == 429
+    # Introspect still works: it does not share the probe budget.
+    r = client.post(f"{URL}/introspect", headers=headers)
+    assert r.status_code == 200, r.text
+
+
+def test_resave_without_password_keeps_stored_password(client):
+    headers, company_id = register(client)
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+    before = stored_dsn(company_id)
+    assert before is not None
+
+    # Omit password entirely (panel re-save). Must keep the old secret and succeed.
+    payload = {
+        "host": HOST,
+        "port": PORT,
+        "database": DB,
+        "username": "atlas_readonly",
+        "sslmode": "prefer",
+    }
+    r = client.put(URL, json=payload, headers=headers)
+    assert r.status_code == 200, r.text
+    assert "password" not in r.json()
+    assert os.environ["ATLAS_READONLY_PASSWORD"] not in r.text
+    # DSN ciphertext may rotate (new Fernet token) but decrypts to the same password.
+    from site_ai_widget.dbconn.crypto import decrypt_dsn
+    from site_ai_widget.dbconn.target import params_from_conninfo
+
+    after = stored_dsn(company_id)
+    assert after is not None
+    kept = params_from_conninfo(decrypt_dsn(after))
+    assert kept.password == os.environ["ATLAS_READONLY_PASSWORD"]
+    assert kept.host == HOST
+
+    # Empty string is treated the same as omit.
+    r = client.put(URL, json={**payload, "password": ""}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert "password" not in r.json()
+
+
+def test_first_save_without_password_is_422(client):
+    headers, _ = register(client)
+    r = client.put(
+        URL,
+        json={
+            "host": HOST,
+            "port": PORT,
+            "database": DB,
+            "username": "atlas_readonly",
+            "sslmode": "prefer",
+        },
+        headers=headers,
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "db_password_required"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"host": "localhost"},
+        {"port": 5435},
+        {"database": "other_db"},
+        {"username": "someone_else"},
+        {"sslmode": "disable"},
+        {"sslmode": "allow"},
+    ],
+    ids=["host", "port", "database", "username", "sslmode-disable", "sslmode-allow"],
+)
+def test_resave_without_password_refuses_a_new_target(client, change):
+    """The stored password is never sent to another server or over weaker TLS."""
+    headers, company_id = register(client)
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+    before = stored_dsn(company_id)
+    payload = {k: v for k, v in body(**change).items() if k != "password"}
+    r = client.put(URL, json=payload, headers=headers)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "db_password_required"
+    assert os.environ["ATLAS_READONLY_PASSWORD"] not in r.text
+    assert stored_dsn(company_id) == before
+
+
+def test_resave_without_password_may_strengthen_sslmode_and_echoes_it(client):
+    headers, company_id = register(client)
+    assert client.put(URL, json=body(sslmode="disable"), headers=headers).status_code == 200
+    got = client.get(URL, headers=headers).json()
+    assert got["sslmode"] == "disable"
+    payload = {k: v for k, v in body(sslmode="prefer").items() if k != "password"}
+    r = client.put(URL, json=payload, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["sslmode"] == "prefer"
+    assert "password" not in r.json()
+    from site_ai_widget.dbconn.crypto import decrypt_dsn
+    from site_ai_widget.dbconn.target import params_from_conninfo
+
+    assert params_from_conninfo(decrypt_dsn(stored_dsn(company_id))).sslmode == "prefer"
+
+
+def test_password_required_does_not_spend_the_probe_budget(client):
+    headers, _ = register(client)
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+    payload = {k: v for k, v in body(host="localhost").items() if k != "password"}
+    for _ in range(15):
+        assert client.put(URL, json=payload, headers=headers).status_code == 422
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+
+
+def test_introspect_limit_is_per_company(client):
+    from site_ai_widget.api.routes import db_connection
+
+    headers, company_id = register(client)
+    assert client.put(URL, json=body(), headers=headers).status_code == 200
+    for _ in range(30):
+        assert client.post(f"{URL}/introspect", headers=headers).status_code == 200
+    blocked = client.post(f"{URL}/introspect", headers=headers)
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "rate_limited"
+    assert "Retry-After" in blocked.headers
+    # The bucket is keyed by company id (plus IP), never shared across companies by name.
+    assert any(company_id in key for key in db_connection._introspect_limiter._calls)
+
+
 def test_introspect_saves_schema_and_is_idempotent(client):
     headers, company_id = register(client)
     assert client.put(URL, json=body(), headers=headers).status_code == 200
@@ -515,12 +643,12 @@ def test_save_connection_never_returns_password_with_sslmode(client):
     assert r.status_code == 200, r.text
     data = r.json()
     assert "password" not in data
-    assert "sslmode" not in data  # write-only; not echoed
+    assert data["sslmode"] == "disable"  # not a secret; shown so a re-save keeps it
     assert os.environ["ATLAS_READONLY_PASSWORD"] not in r.text
     got = client.get(URL, headers=headers)
     assert got.status_code == 200
     assert "password" not in got.json()
-    assert "sslmode" not in got.json()
+    assert got.json()["sslmode"] == "disable"
 
 
 def schema_of(client: TestClient, headers: dict) -> dict:

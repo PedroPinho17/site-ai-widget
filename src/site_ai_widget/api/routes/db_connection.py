@@ -31,9 +31,13 @@ from site_ai_widget.dbconn.target import ConnectionParams, build_conninfo, param
 
 router = APIRouter(prefix="/db-connection", tags=["db-connection"])
 
-# Every test opens a connection to an outside server, so it has its own small budget
-# per company and per client IP. This stops the panel being used to scan hosts and ports.
+# Every save/test opens a connection to an outside server, so it has its own small
+# budget per company and per client IP. This stops the panel being used to scan hosts.
 _probe_limiter = RateLimiter(10, 600)
+
+# Introspect is heavier than a probe but a normal admin reloads a few times while
+# approving tables — keep it off the probe bucket so save/test retries do not block it.
+_introspect_limiter = RateLimiter(30, 600)
 
 # Each call spends LLM tokens, so it has its own budget per company and per client IP.
 _suggest_limiter = RateLimiter(30, 600)
@@ -44,8 +48,9 @@ _TRANSIENT_PROBE_CODES = frozenset({"db_busy"})
 
 
 def reset_db_connection_limiters() -> None:
-    """Clear probe/suggest counters (tests)."""
+    """Clear probe/introspect/suggest counters (tests)."""
     _probe_limiter.reset()
+    _introspect_limiter.reset()
     _suggest_limiter.reset()
 
 
@@ -55,13 +60,20 @@ def _check_probe(company_id: str, request: Request) -> None:
     _probe_limiter.check_many((f"probe:{company_id}", f"probe:ip:{ip}"))
 
 
+def _check_introspect(company_id: str, request: Request) -> None:
+    ip = resolve_client_ip(request)
+    _introspect_limiter.check_many((f"introspect:{company_id}", f"introspect:ip:{ip}"))
+
+
 def _check_suggest(company_id: str, request: Request) -> None:
     ip = resolve_client_ip(request)
     _suggest_limiter.check_many((f"suggest:{company_id}", f"suggest:ip:{ip}"))
 
 
-def _to_response(row, *, readable_tables: int | None = None) -> DbConnectionResponse:
+def _to_response(row, *, sslmode: str, readable_tables: int | None = None) -> DbConnectionResponse:
+    """``row`` is the first 8 columns of :data:`_COLUMNS`."""
     return DbConnectionResponse(
+        sslmode=sslmode,
         host=row[0],
         port=row[1],
         database=row[2],
@@ -79,7 +91,7 @@ def _load_row(company_id: str):
         return conn.execute(
             """
             SELECT host, port, database_name, username, status, last_error,
-                   last_checked_at, last_introspected_at, dsn_encrypted
+                   last_checked_at, last_introspected_at, dsn_encrypted, sslmode
             FROM db_connections
             WHERE company_id = %s
             """,
@@ -146,7 +158,36 @@ def get_connection(user: dict = Depends(panel_user)) -> DbConnectionResponse:
     row = _load_row(str(user["company_id"]))
     if not row:
         raise ApiError("not_found", 404)
-    return _to_response(row[:8])
+    return _to_response(row[:8], sslmode=row[9])
+
+
+_SSL_STRENGTH = {"disable": 0, "allow": 1, "prefer": 2, "require": 3, "verify-ca": 4, "verify-full": 5}
+
+
+def _password_for_save(company_id: str, body: DbConnectionSave, host: str) -> str:
+    """The password to use: the new one, or the stored one on a same-target re-save.
+
+    The stored password is reused only when host, port, database and user are
+    unchanged and sslmode is not weaker. Anything else needs the password again,
+    so an admin session can never send a saved secret to another server or over
+    a weaker TLS setting.
+    """
+    if body.password is not None:
+        return body.password
+    existing = _load_row(company_id)
+    if existing is None:
+        raise ApiError("db_password_required", 422)
+    stored = params_from_conninfo(decrypt_dsn(existing[8]))
+    same_target = (stored.host, stored.port, stored.database, stored.username) == (
+        host,
+        body.port,
+        body.database,
+        body.username,
+    )
+    weaker = _SSL_STRENGTH[body.sslmode] < _SSL_STRENGTH.get(stored.sslmode, _SSL_STRENGTH["prefer"])
+    if not same_target or weaker:
+        raise ApiError("db_password_required", 422)
+    return stored.password
 
 
 @router.put("", response_model=DbConnectionResponse)
@@ -156,13 +197,16 @@ def save_connection(
     user: dict = Depends(require_admin),
 ) -> DbConnectionResponse:
     company_id = str(user["company_id"])
+    host = body.host.strip().lower()
+    # Checked before the probe budget is spent: no network access happens here.
+    password = _password_for_save(company_id, body, host)
     _check_probe(company_id, request)
     params = ConnectionParams(
-        host=body.host.strip().lower(),
+        host=host,
         port=body.port,
         database=body.database,
         username=body.username,
-        password=body.password,
+        password=password,
         sslmode=body.sslmode,
     )
     # Encrypt first: without CONNECTIONS_KEY we stop (503) before touching the client DB.
@@ -182,23 +226,24 @@ def save_connection(
         row = conn.execute(
             """
             INSERT INTO db_connections (
-                company_id, dsn_encrypted, host, port, database_name, username,
+                company_id, dsn_encrypted, host, port, database_name, username, sslmode,
                 status, last_error, last_checked_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, 'ok', NULL, now(), now())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'ok', NULL, now(), now())
             ON CONFLICT (company_id) DO UPDATE SET
                 dsn_encrypted = EXCLUDED.dsn_encrypted,
                 host = EXCLUDED.host,
                 port = EXCLUDED.port,
                 database_name = EXCLUDED.database_name,
                 username = EXCLUDED.username,
+                sslmode = EXCLUDED.sslmode,
                 status = 'ok',
                 last_error = NULL,
                 last_checked_at = now(),
                 last_introspected_at = CASE WHEN %s THEN db_connections.last_introspected_at END,
                 updated_at = now()
             RETURNING host, port, database_name, username, status, last_error,
-                      last_checked_at, last_introspected_at
+                      last_checked_at, last_introspected_at, sslmode
             """,
             (
                 company_id,
@@ -207,10 +252,11 @@ def save_connection(
                 params.port,
                 params.database,
                 params.username,
+                params.sslmode,
                 same_db,
             ),
         ).fetchone()
-    return _to_response(row, readable_tables=result.readable_tables)
+    return _to_response(row[:8], sslmode=row[8], readable_tables=result.readable_tables)
 
 
 @router.post("/test", response_model=DbConnectionResponse)
@@ -244,13 +290,13 @@ def test_connection(
             SET status = %s, last_error = %s, last_checked_at = now(), updated_at = now()
             WHERE company_id = %s
             RETURNING host, port, database_name, username, status, last_error,
-                      last_checked_at, last_introspected_at
+                      last_checked_at, last_introspected_at, sslmode
             """,
             (status, error, company_id),
         ).fetchone()
     if not updated:
         raise ApiError("not_found", 404)  # deleted in the meantime
-    return _to_response(updated, readable_tables=readable_tables)
+    return _to_response(updated[:8], sslmode=updated[8], readable_tables=readable_tables)
 
 
 @router.post("/introspect", response_model=IntrospectResponse)
@@ -265,7 +311,7 @@ def introspect_connection(
     keeps every admin decision, and retries approved tables still without an embedding.
     """
     company_id = str(user["company_id"])
-    _check_probe(company_id, request)
+    _check_introspect(company_id, request)
     row = _load_row(company_id)
     if not row:
         raise ApiError("not_found", 404)

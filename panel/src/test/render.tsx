@@ -1,16 +1,15 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderResult } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AppRoutes } from "@/App";
 import { AuthProvider } from "@/auth/AuthProvider";
+import { createQueryClient } from "@/lib/query-client";
 import { loadSession } from "@/lib/session";
 
 export function renderPanel(route = "/"): RenderResult {
   loadSession();
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const client = createQueryClient();
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
