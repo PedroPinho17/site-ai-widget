@@ -820,6 +820,21 @@ def test_bare_dot_price_is_rejected_when_currency_formats_with_euro():
     assert "8.49" not in text
 
 
+def test_single_row_llm_dash_line_with_dot_euro_falls_back_to_pt():
+    """The common bad single-row shape: name — 8.49 € (dot) must become 8,49 €."""
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", "8.49"]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=_reply("Azeite Atlas Premium 750 ml — 8.49 €"),
+    )
+    assert text == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "8.49" not in text
+    assert "750 ml" in text
+
+
 def test_sql_prompt_does_not_suggest_contact_closers():
     seen: list[str] = []
 

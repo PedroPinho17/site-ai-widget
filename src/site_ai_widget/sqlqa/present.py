@@ -433,12 +433,32 @@ def _text_value_ok(value: str, folded_reply: str, *, single_row: bool) -> bool:
     return all(token in folded_reply for token in tokens)
 
 
+def _pt_dot_money_rejected(cleaned: str, numeric_values: list[str], source: str) -> bool:
+    """True when a pt money cell uses a comma but the reply rewrote it with a dot.
+
+    Product-name numbers that already appear in the rows (``750 ml``, ``1.5 L``)
+    are allowed; only the formatted money amounts must keep the comma.
+    """
+    source_numbers = set(_NUMBER.findall(source))
+    for value in numeric_values:
+        for num in _NUMBER.findall(value):
+            if "," not in num:
+                continue
+            dotted = num.replace(",", ".")
+            if dotted in source_numbers:
+                continue
+            if re.search(rf"(?<![\d.]){re.escape(dotted)}(?![\d.])", cleaned):
+                return True
+    return False
+
+
 def _llm_answer_fail(
     text: str,
     *,
     fallback: str,
     payload: list[dict[str, str]],
     currency: str | None = None,
+    lang: Lang | None = None,
 ) -> str | None:
     """Return a short reason code when the reply is refused; None when it is ok."""
     cleaned = (text or "").strip()
@@ -468,6 +488,8 @@ def _llm_answer_fail(
     if any(value.casefold() not in folded for value in numeric_values):
         return "missing_formatted_amount"
     if not _amounts_only_as_formatted(cleaned, numeric_values):
+        return "reformatted_amount"
+    if lang == "pt" and _pt_dot_money_rejected(cleaned, numeric_values, source):
         return "reformatted_amount"
     if not _no_new_units(cleaned, source):
         return "new_unit"
@@ -569,7 +591,9 @@ def present_sql_answer(
     text = (raw or "").strip()
     more = _more_line(rows, locale, truncated, products=products)
     shown = fallback if more is None else fallback.rsplit("\n", 1)[0]
-    reason = _llm_answer_fail(text, fallback=shown, payload=payload, currency=currency)
+    reason = _llm_answer_fail(
+        text, fallback=shown, payload=payload, currency=currency, lang=locale
+    )
     if reason is not None:
         log.info(
             "sqlqa/present stage=fallback reason=validation detail=%s rows=%s currency=%s lang=%s",

@@ -24,6 +24,7 @@ class WidgetAskRequest(BaseModel):
     question: str = ""
     session_token: str | None = Field(default=None, max_length=200)
     lang: Literal["pt", "en"] | None = None
+    previous_lang: Literal["pt", "en"] | None = None
 
 
 class WidgetAskResponse(AskResponse):
@@ -68,6 +69,7 @@ def widget_ask(key: str, body: WidgetAskRequest, request: Request) -> WidgetAskR
         record.company_id,
         body.question,
         lang=body.lang,
+        previous_lang=body.previous_lang,
     )
     token, session_id = resolve_session(record.company_id, body.session_token)
     append_turn(session_id, record.company_id, (body.question or "").strip(), result)

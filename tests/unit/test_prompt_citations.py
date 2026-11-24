@@ -24,6 +24,7 @@ def test_system_asks_for_european_portuguese():
     assert "European Portuguese" in system or "Portugal" in system
     assert "você" in system.lower()
     assert "Answer only what was asked" in system
+    assert "Amendoeiras 48" in system
     assert "telemóvel" not in system
     assert "contactar" not in system
 

@@ -60,6 +60,9 @@
 
   var key = (script.getAttribute("data-key") || "").trim();
   var lang = resolveLang(script.getAttribute("data-lang"));
+  /* Language of the last answer, as decided by the server. The widget never
+     guesses a language itself; it only sends this back for short follow-ups. */
+  var previousLang = null;
   var copy = STRINGS[lang];
   var apiBase = apiBaseFrom(script.src || "");
   var storageKey = "site-ai-widget:" + key + ":session";
@@ -700,6 +703,9 @@
         session_token: readToken() || null,
         lang: lang
       };
+      if (previousLang) {
+        payload.previous_lang = previousLang;
+      }
       postJson(widgetPath("ask"), payload)
         .then(function (res) {
           return readJson(res).then(function (data) {
@@ -714,6 +720,9 @@
           if (kind !== "ok") {
             self._fail(kind);
             return;
+          }
+          if (result.data.lang === "pt" || result.data.lang === "en") {
+            previousLang = result.data.lang;
           }
           var token = result.data.session_token;
           if (typeof token === "string" && token) {

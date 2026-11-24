@@ -17,6 +17,7 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 class AssistantTestRequest(BaseModel):
     question: str = Field(default="")
     lang: Literal["pt", "en"] | None = None
+    previous_lang: Literal["pt", "en"] | None = None
 
 
 @router.post("/test", response_model=AskResponse)
@@ -27,12 +28,14 @@ def test_assistant(
     """Answer as the widget would, for the JWT company only.
 
     Nothing is written to visitor sessions. The response never includes SQL,
-    prompts or database error text.
+    prompts or database error text. Answer language follows the question
+    (short follow-ups use ``previous_lang``).
     """
     return answer_question(
         str(user["company_id"]),
         body.question or "",
         lang=body.lang,
+        previous_lang=body.previous_lang,
         sql_fn=answer_with_sql,
         docs_fn=ask_documents,
     )

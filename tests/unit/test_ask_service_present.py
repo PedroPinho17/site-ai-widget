@@ -134,7 +134,7 @@ def test_truncated_flag_reaches_the_answer_and_presenter_failure_falls_back():
 
     out = answer_question(
         uuid4(),
-        "todos os produtos?",
+        "Which products do you have?",
         lang="en",
         sql_fn=lambda *a, **k: SqlAnswer(
             status="ok",
@@ -295,3 +295,68 @@ def test_omitted_lang_for_an_english_company_gives_en_money(monkeypatch):
         ).format_sql_answer_deterministic(columns, rows, lang, currency=kw.get("currency")),
     )
     assert out.answer == "Olive oil — €8.49"
+
+
+def test_pt_question_formats_money_with_comma_even_if_widget_lang_is_en(monkeypatch):
+    monkeypatch.setattr("site_ai_widget.ask_service._company_currency", lambda cid: "EUR")
+    monkeypatch.setattr("site_ai_widget.ask_service._company_locale", lambda cid: "en")
+    out = answer_question(
+        uuid4(),
+        "Qual o preço do azeite?",
+        lang="en",
+        sql_fn=lambda *a, **k: SqlAnswer(
+            status="ok",
+            columns=["name", "price"],
+            rows=[["Azeite Atlas Premium 750 ml", "8.49"]],
+            row_count=1,
+            truncated=False,
+            attempts=1,
+            tables=["products"],
+        ),
+        docs_fn=lambda **k: {"matched": False},
+    )
+    assert out.mode == "sql"
+    assert out.answer == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "8.49" not in (out.answer or "")
+    assert "750 ml" in (out.answer or "")
+
+
+def test_short_ola_uses_previous_lang(monkeypatch):
+    monkeypatch.setattr("site_ai_widget.ask_service._company_locale", lambda cid: "en")
+    out = answer_question(
+        uuid4(),
+        "Olá",
+        lang="en",
+        previous_lang="pt",
+        sql_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("greeting skips sql")),
+        docs_fn=lambda **k: (_ for _ in ()).throw(AssertionError("greeting skips docs")),
+    )
+    assert out.mode == "chat"
+    assert out.answer == "Olá! Em que posso ajudar?"
+
+
+
+def test_every_answer_reports_its_language():
+    greeting = answer_question(uuid4(), "Olá", lang="en", previous_lang="pt")
+    assert (greeting.mode, greeting.lang) == ("chat", "pt")
+    en = answer_question(
+        uuid4(),
+        "Do you have pão de milho?",
+        lang="pt",
+        sql_fn=lambda *a, **k: SqlAnswer(
+            status="ok", columns=["name"], rows=[["Pão de milho"]], row_count=1,
+            truncated=False, attempts=1, tables=["products"],
+        ),
+        docs_fn=lambda **k: {"matched": False},
+        present_fn=lambda columns, rows, lang, **kw: f"lang={lang}",
+    )
+    assert en.lang == "en"
+    assert en.answer == "lang=en"
+    none = answer_question(
+        uuid4(),
+        "Qual a política de devoluções?",
+        lang="en",
+        sql_fn=lambda *a, **k: SqlAnswer(status="no_sql", attempts=1),
+        docs_fn=lambda **k: {"matched": False},
+    )
+    assert (none.mode, none.lang) == ("none", "pt")

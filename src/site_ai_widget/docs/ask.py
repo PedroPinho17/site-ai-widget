@@ -10,6 +10,7 @@ from site_ai_widget.api.errors import ApiError
 from site_ai_widget.db.pool import connection
 from site_ai_widget.docs.prompt import build_messages, map_citations
 from site_ai_widget.docs.retrieve import hybrid_search
+from site_ai_widget.docs.spacing import restore_source_spacing
 from site_ai_widget.llm.client import complete_chat
 
 log = logging.getLogger("site_ai_widget")
@@ -85,6 +86,7 @@ def ask_documents(
     # Never log question text or excerpt content
     log.info("ask/docs company=%s chunks=%s", company_id, len(chunks))
     answer = complete(messages, temperature=0)
+    answer = restore_source_spacing(answer, chunks)
     citations = map_citations(answer, chunks)
     # matched=True whenever search returned chunks. Citations always include at
     # least one chip per retrieved document (from [n] or a chunk fallback).

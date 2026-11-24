@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.greetings import small_talk_reply
+from site_ai_widget.reply_lang import resolve_answer_lang
 from site_ai_widget.sqlqa.present import format_sql_answer_deterministic, present_sql_answer
 
 log = logging.getLogger("site_ai_widget")
@@ -41,6 +42,8 @@ class AskResponse(BaseModel):
     sources: list[AskCitation] | None = None
     tables: list[str] | None = None
     elapsed_ms: int | None = None
+    # Language of this answer; clients send it back as previous_lang.
+    lang: Literal["pt", "en"] | None = None
     message: str | None = None
 
 
@@ -49,6 +52,7 @@ def answer_question(
     question: str,
     *,
     lang: str | None = None,
+    previous_lang: str | None = None,
     sql_fn=None,
     docs_fn=None,
     present_fn=None,
@@ -57,7 +61,9 @@ def answer_question(
 
     ``company_id`` is chosen by the caller (the JWT on ``/ask``, the widget key
     on the public route). It is never taken from the question body.
-    ``lang`` is ``pt`` or ``en`` for the SQL answer phrasing (widget ``data-lang``).
+    ``lang`` is the widget ``data-lang`` / request hint; the answer language
+    follows the visitor question (see :func:`resolve_answer_lang`).
+    ``previous_lang`` is used for short follow-ups (``ok``, ``Olá``).
     """
     settings = get_settings()
     max_chars = min(settings.max_question_chars, _HARD_QUESTION_CHARS)
@@ -69,13 +75,17 @@ def answer_question(
         raise ApiError("question_too_long", 422, n=max_chars)
 
     company_id = str(company_id)
-    # Widget data-lang, Test assistant body.lang, or the company widget locale.
-    effective_lang = lang or _company_locale(company_id)
+    effective_lang = resolve_answer_lang(
+        question,
+        request_lang=lang,
+        previous_lang=previous_lang,
+        company_locale=_company_locale(company_id),
+    )
 
     reply = small_talk_reply(question, effective_lang)
     if reply is not None:
         log.info("ask/sql stage=greeting")
-        return AskResponse(mode="chat", answer=reply, elapsed_ms=_elapsed(started))
+        return AskResponse(mode="chat", answer=reply, elapsed_ms=_elapsed(started), lang=effective_lang)
 
     if sql_fn is None or docs_fn is None:
         # Looked up on the owning modules at call time (patchable in tests). The
@@ -153,27 +163,27 @@ def answer_question(
             truncated=truncated,
             answer=answer,
             tables=list(getattr(sql_answer, "tables", []) or []),
-            elapsed_ms=_elapsed(started),
+            elapsed_ms=_elapsed(started), lang=effective_lang,
         )
 
     try:
         docs = docs_fn(company_id=company_id, question=question)
     except ApiError as exc:
         log.warning("ask/docs failed: %s", exc.code)
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
     except Exception as exc:
         log.warning("ask/docs failed: %s", type(exc).__name__)
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
 
     # Decide from search hits (matched), not from whether the answer cited [n].
     if not docs.get("matched"):
-        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started), lang=effective_lang)
 
     return AskResponse(
         mode="docs",
         answer=docs["answer"],
         sources=[AskCitation(**c) for c in docs["citations"]],
-        elapsed_ms=_elapsed(started),
+        elapsed_ms=_elapsed(started), lang=effective_lang,
     )
 
 

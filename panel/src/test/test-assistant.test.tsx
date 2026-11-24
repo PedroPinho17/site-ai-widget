@@ -83,8 +83,7 @@ describe("test assistant page", () => {
 
     const posted = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/assistant/test"));
     expect(posted).toBeTruthy();
-    // No lang from the panel: the API uses the company widget locale, so the
-    // panel UI language and the settings loading state cannot change answers.
+    // No panel UI locale: the API detects language from the question.
     expect(JSON.parse(String((posted?.[1] as RequestInit).body))).toEqual({
       question: "Qual o preço do azeite?",
     });
@@ -245,5 +244,38 @@ describe("widget currency setting", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("You do not have permission to do that.");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByText("raw role detail")).not.toBeInTheDocument();
+  });
+
+  it("sends back the language of the last answer, never a panel guess", async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/company")) {
+          return jsonResponse(200, { id: admin.company_id, name: "Mercearia Atlas", slug: "x", default_locale: "pt" });
+        }
+        if (url.endsWith("/assistant/test")) {
+          bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return jsonResponse(200, { mode: "chat", answer: `answer ${bodies.length}`, lang: "en", elapsed_ms: 1 });
+        }
+        return jsonResponse(404, { detail: { code: "not_found" } });
+      }),
+    );
+    setSession("test-jwt-token", admin);
+    renderPanel("/test");
+
+    const box = await screen.findByLabelText("Question");
+    // A Portuguese-looking question: the panel must still not guess a language.
+    await user.type(box, "Têm pão de milho?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("answer 1");
+    await user.type(box, "ok");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("answer 2");
+
+    expect(bodies[0]).toEqual({ question: "Têm pão de milho?" });
+    expect(bodies[1]).toEqual({ question: "ok", previous_lang: "en" });
   });
 });

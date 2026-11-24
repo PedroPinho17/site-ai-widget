@@ -65,6 +65,7 @@ def make_atlas(path: Path) -> None:
         [
             "Azeite Atlas Premium 750 ml.",
             "Queijo da Serra da Estrela (curado) - peca de 200 g.",
+            "Queijo de ovelha curado - peca de 300 g.",
             "Cafe Moagem da Baixa - embalagem de 250 g.",
             "Doce de abobora caseiro Atlas - frasco 300 g.",
             "Para duvidas sobre stock, pergunte ao balcao ou use o assistente.",

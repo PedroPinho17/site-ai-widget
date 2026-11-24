@@ -441,3 +441,14 @@ def test_markdown_renders_html_in_replies_as_plain_text_and_tidies_citations():
     assert "<b>Rua</b>" in body["text"]
     assert body["tidy"] == "Abrimos às 9h e aos sábados."
     assert body["address"] == "Rua das Amendoeiras 48, Lisboa"
+
+
+def test_widget_never_guesses_the_language_and_echoes_the_server_lang():
+    """The server decides the answer language; the widget only sends it back."""
+    source = _js()
+    for name in ("guessQuestionLang", "isShortUtterance", "rememberQuestionLang"):
+        assert name not in source
+    assert "var previousLang = null;" in source
+    assert 'if (result.data.lang === "pt" || result.data.lang === "en") {' in source
+    assert "previousLang = result.data.lang;" in source
+    assert "payload.previous_lang = previousLang;" in source

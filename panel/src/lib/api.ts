@@ -346,16 +346,24 @@ export type AssistantTestResponse = {
   sources?: AssistantCitation[] | null;
   tables?: string[] | null;
   elapsed_ms?: number | null;
+  lang?: "pt" | "en" | null;
 };
 
 /**
- * No ``lang``: the API answers in the company widget locale (the same rule the
- * widget follows), so the panel UI language and loading state never leak in.
+ * Answer language follows the question on the API. ``previous_lang`` is only
+ * for short follow-ups (``ok``, ``Olá``); the panel UI locale is never sent.
  */
-export function testAssistantRequest(question: string): Promise<AssistantTestResponse> {
+export function testAssistantRequest(
+  question: string,
+  previousLang?: "pt" | "en" | null,
+): Promise<AssistantTestResponse> {
+  const body: { question: string; previous_lang?: "pt" | "en" } = { question };
+  if (previousLang === "pt" || previousLang === "en") {
+    body.previous_lang = previousLang;
+  }
   return api("/assistant/test", {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -9,6 +9,7 @@ from site_ai_widget.sqlqa import pipeline
 from site_ai_widget.sqlqa.generator import RETRY_HINTS, retry_hint
 from site_ai_widget.sqlqa.pipeline import (
     SqlAnswer,
+    _is_catalog_question,
     _relax_text_match,
     _stem_for_search,
     _stem_ilike_match,
@@ -672,8 +673,11 @@ def test_catalog_plural_empty_result_is_restemmed(monkeypatch):
         if "%queijo%" in query.lower() and "unaccent" in query.lower():
             return RunResult(
                 columns=["name", "price"],
-                rows=[["Queijo da Serra da Estrela 200 g", "9.90"]],
-                row_count=1,
+                rows=[
+                    ["Queijo da Serra da Estrela 200 g", "9.90"],
+                    ["Queijo de ovelha curado 300 g", "7.50"],
+                ],
+                row_count=2,
                 truncated=False,
                 elapsed_ms=1,
             )
@@ -687,9 +691,18 @@ def test_catalog_plural_empty_result_is_restemmed(monkeypatch):
 
     out = answer_with_sql(COMPANY, "Que queijos têm?")
     assert out.status == "ok"
-    assert out.row_count == 1
-    assert out.rows[0][0].startswith("Queijo")
+    assert out.row_count == 2
+    assert all("Queijo" in row[0] for row in out.rows)
     assert any("%queijo%" in q.lower() for q in ran)
+    assert _is_catalog_question("Que queijos têm?")
+    assert _is_catalog_question("What cheeses do you have?")
+
+
+def test_catalog_question_triggers_no_rows_retry_flag():
+    assert _is_catalog_question("Que queijos têm?")
+    assert _is_catalog_question("quais produtos têm?")
+    assert _is_catalog_question("What cheeses do you have?")
+    assert not _is_catalog_question("Qual o horário de abertura?")
 
 
 def test_strip_unaccent_leaves_lower_ilike():
@@ -784,3 +797,62 @@ def test_plain_plural_word_is_still_stemmed():
     out = _unaccent_text_match(sql, "Que queijos têm?")
     assert out is not None
     assert "'%queijo%'" in out
+
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Que queijos têm?", True),
+        ("Têm queijos?", True),
+        ("Quais vinhos vendem?", True),
+        ("What cheeses do you have?", True),
+        ("Do you sell bread?", True),
+        ("O queijo da serra tem lactose?", False),
+        ("Qual o preço do azeite?", False),
+    ],
+)
+def test_catalog_question_is_detected_by_shape_not_product_words(question, expected):
+    from site_ai_widget.sqlqa.pipeline import _is_catalog_question
+
+    assert _is_catalog_question(question) is expected
+
+
+def test_catalog_question_with_an_empty_stock_filter_is_not_retried(monkeypatch):
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return (
+            "SELECT p.name, p.price FROM products AS p JOIN stock AS s ON s.product_id = p.id "
+            "WHERE unaccent(lower(p.name)) ILIKE unaccent(lower('%queijo%')) AND s.quantity > 0 LIMIT 10"
+        )
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(
+        pipeline,
+        "run_sql",
+        lambda *a, **k: RunResult(columns=["name", "price"], rows=[], row_count=0, truncated=False, elapsed_ms=1),
+    )
+    out = answer_with_sql(COMPANY, "Que queijos têm em stock?")
+    assert out.row_count == 0
+    assert gens["n"] == 1
+
+
+def test_catalog_question_without_numeric_filter_is_retried_once(monkeypatch):
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return "SELECT p.name, p.price FROM products AS p WHERE p.name ILIKE '%queijos%' LIMIT 10"
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(
+        pipeline,
+        "run_sql",
+        lambda *a, **k: RunResult(columns=["name", "price"], rows=[], row_count=0, truncated=False, elapsed_ms=1),
+    )
+    answer_with_sql(COMPANY, "Que queijos têm?")
+    assert gens["n"] == 2

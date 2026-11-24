@@ -6,6 +6,7 @@ and attempt counts are fine. SqlAnswer never carries SQL or DB error text.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import unicodedata
 from collections.abc import Callable
@@ -114,13 +115,16 @@ def answer_with_sql(
             )
         if result.row_count == 0 and attempt < 2 and (
             _has_text_equality(validated)
-            or (_has_join(validated) and not _has_numeric_filter(validated))
+            or (
+                (_has_join(validated) or _is_catalog_question(question))
+                and not _has_numeric_filter(validated)
+            )
         ):
-            # Text equality or a join that matched nothing: rewrite once (ILIKE /
-            # multi-word / drop a join). A numeric filter that matched nothing
-            # (s.quantity > 0, price < 5) is a real empty result: it is never sent
-            # back, so a retry cannot drop the stock condition and list the product
-            # as if it were available.
+            # Text equality, a join that matched nothing, or a catalog question
+            # ("que queijos têm?"): rewrite once (ILIKE / stem / drop a join).
+            # A numeric filter that matched nothing (s.quantity > 0, price < 5)
+            # is a real empty result, catalog question or not: a retry must never
+            # drop the stock condition and list products as if they were available.
             log.info("sqlqa/pipeline company=%s stage=no_rows attempts=%s", company_id, attempts)
             previous_error = retry_hint("no_rows")
             continue
@@ -209,6 +213,20 @@ def _fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text)
     plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return " ".join(plain.casefold().split())
+
+
+# Question shape only, never product words: the same code serves every company.
+# "Que queijos têm?", "Quais vinhos vendem?", "Têm queijos?", "What cheeses do you
+# have?", "Do you sell bread?".
+_CATALOG_QUESTION = re.compile(
+    r"(?i)(?:\b(?:que|quais|what|which)\b.{0,48}\b(?:t[eê]m|vendem|have|sell)\b|"
+    r"^\s*(?:t[eê]m|vendem|do\s+you\s+(?:have|sell)|have\s+you\s+got)\b)",
+)
+
+
+def _is_catalog_question(question: str) -> bool:
+    """Visitor is asking which products exist (list from ``products``, not docs)."""
+    return bool(_CATALOG_QUESTION.search(question or ""))
 
 
 def _typed_by_visitor(text: str, question: str) -> bool:

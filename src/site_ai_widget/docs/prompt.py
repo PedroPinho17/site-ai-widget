@@ -34,6 +34,8 @@ def build_messages(question: str, chunks: list[dict[str, Any]]) -> list[dict[str
         "never Brazilian Portuguese (você, celular). "
         "Answer only what was asked. Do not add contact suggestions, phone numbers, "
         "or invitations to call or visit. Do not invent information. "
+        "Copy addresses, street names and numbers exactly as written in the excerpts, "
+        "including every space (e.g. 'Amendoeiras 48', never 'Amendoeiras48'). "
         "Cite sources inline with [n] matching the excerpt id. "
         "If the answer is not supported by the excerpts, say you do not have that information "
         "in the documents instead of guessing. Prefer plain sentences; avoid heavy markdown."

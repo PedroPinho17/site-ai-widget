@@ -17,6 +17,7 @@ type ChatMessage = {
   text: string;
   chips: string[];
   elapsed_ms?: number | null;
+  lang?: "pt" | "en" | null;
 };
 
 function answerText(data: AssistantTestResponse): string {
@@ -27,6 +28,17 @@ function answerText(data: AssistantTestResponse): string {
     return data.message;
   }
   return "Não consegui responder a isso.";
+}
+
+/** Language the server used for the last answer; never guessed in the panel. */
+function previousAnswerLang(messages: ChatMessage[]): "pt" | "en" | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "assistant" && (message.lang === "pt" || message.lang === "en")) {
+      return message.lang;
+    }
+  }
+  return null;
 }
 
 export function TestAssistantPage() {
@@ -55,7 +67,7 @@ export function TestAssistantPage() {
     setBusy(true);
     setError("");
     try {
-      const data = await testAssistantRequest(trimmed);
+      const data = await testAssistantRequest(trimmed, previousAnswerLang(messages));
       setMessages((current) => [
         ...current,
         {
@@ -64,6 +76,7 @@ export function TestAssistantPage() {
           text: answerText(data),
           chips: sourceChips(data),
           elapsed_ms: data.elapsed_ms,
+          lang: data.lang ?? null,
         },
       ]);
     } catch (err) {
