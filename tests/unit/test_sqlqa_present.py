@@ -18,7 +18,7 @@ def test_one_row_pt_name_and_price():
         [["Azeite da serra, lata de 500 ml", Decimal("8.90")]],
         "pt",
     )
-    assert text == "Azeite da serra, lata de 500 ml: 8,90"
+    assert text == "Azeite da serra, lata de 500 ml — 8,90"
     assert "€" not in text  # no guessed currency
     assert "SELECT" not in text
 
@@ -30,15 +30,15 @@ def test_currency_only_on_money_columns_and_only_when_set():
         "pt",
         currency="EUR",
     )
-    assert with_eur == "Azeite: 8,49 €, un"
+    assert with_eur == "Azeite · un — 8,49 €"
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en", currency="EUR") == (
         "price: €8.49"
     )
     unset = format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt")
-    assert unset == "price: 8,49"
+    assert unset == "preço: 8,49"
     assert "€" not in unset
     stock = format_sql_answer_deterministic(["quantity"], [[3]], "pt", currency="EUR")
-    assert stock == "quantity: 3"
+    assert stock == "quantidade: 3"
     assert "€" not in stock
 
 
@@ -61,7 +61,7 @@ def test_pt_money_must_match_the_formatted_value(reply):
         question="Qual o preço do azeite?",
         llm_complete=lambda messages, *, temperature=0: reply,
     )
-    assert text == "Azeite: 8,49 €"
+    assert text == "Azeite — 8,49 €"
 
 
 def test_en_money_must_be_symbol_then_amount():
@@ -88,7 +88,7 @@ def test_en_money_must_be_symbol_then_amount():
             question="How much is olive oil?",
             llm_complete=lambda messages, *, temperature=0, reply=reply: reply,
         )
-        assert text == "Olive oil: €8.49"
+        assert text == "Olive oil — €8.49"
 
 
 def test_other_currency_symbol_is_rejected():
@@ -100,12 +100,12 @@ def test_other_currency_symbol_is_rejected():
         question="Qual o preço do azeite?",
         llm_complete=lambda messages, *, temperature=0: "O Azeite custa $8.49.",
     )
-    assert text == "Azeite: 8,49 €"
+    assert text == "Azeite — 8,49 €"
     assert "$" not in text
 
 
 def test_one_row_single_column_includes_label_pt_and_en():
-    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "price: 8,49"
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "preço: 8,49"
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en") == "price: 8.49"
 
 
@@ -115,7 +115,7 @@ def test_one_row_en():
         [["Mountain olive oil, 500 ml tin", Decimal("8.90")]],
         "en",
     )
-    assert text == "Mountain olive oil, 500 ml tin: 8.90"
+    assert text == "Mountain olive oil, 500 ml tin — 8.90"
 
 
 def test_several_rows_capped_with_more_pt():
@@ -123,7 +123,7 @@ def test_several_rows_capped_with_more_pt():
     text = format_sql_answer_deterministic(["name", "price"], rows, "pt")
     lines = text.splitlines()
     assert len(lines) == 11  # 10 items + "e mais 3"
-    assert lines[0].startswith("Produto 1:")
+    assert lines[0].startswith("Produto 1 —")
     assert lines[-1] == "e mais 3"
     assert "SELECT" not in text
 
@@ -178,7 +178,7 @@ def test_one_row_llm_failure_falls_back_pt_and_en():
             question="Qual o preço?",
             llm_complete=boom,
         )
-        == "price: 8,49"
+        == "preço: 8,49"
     )
     assert (
         present_sql_answer(
@@ -201,7 +201,7 @@ def test_one_row_validation_failure_uses_labeled_fallback_not_not_found():
         question="Qual o preço do azeite?",
         llm_complete=lambda messages, *, temperature=0: "Não encontrei essa informação.",
     )
-    assert text == "Azeite da serra, lata de 500 ml: 8,49"
+    assert text == "Azeite da serra, lata de 500 ml — 8,49"
     assert "Não encontrei" not in text
 
 
@@ -217,7 +217,7 @@ def test_one_row_llm_error_uses_labeled_fallback(caplog):
             question="Qual o preço do azeite?",
             llm_complete=boom,
         )
-    assert text == "Azeite da serra, lata de 500 ml: 8,49"
+    assert text == "Azeite da serra, lata de 500 ml — 8,49"
     assert "stage=fallback" in caplog.text
     assert "reason=llm_error" in caplog.text
     assert "8,49" not in caplog.text
@@ -232,7 +232,7 @@ def test_one_row_llm_invented_number_falls_back():
         question="Qual o preço do azeite?",
         llm_complete=lambda messages, *, temperature=0: "O azeite custa 7,99.",
     )
-    assert text == "price: 8,49"
+    assert text == "preço: 8,49"
 
 
 def test_llm_success_used_for_several_rows():
@@ -261,7 +261,7 @@ def test_llm_failure_falls_back_to_deterministic():
         "pt",
         llm_complete=boom,
     )
-    assert text == "Azeite: 8,90\nQueijo: 12"
+    assert text == "Azeite — 8,90\nQueijo — 12"
 
 
 def test_llm_sql_shaped_reply_rejected():
@@ -278,10 +278,12 @@ def test_llm_sql_shaped_reply_rejected():
     assert "SELECT" not in text
 
 
-@pytest.mark.parametrize("lang", ["pt", "PT-pt", None, "en"])
-def test_normalize_lang_paths(lang):
-    text = format_sql_answer_deterministic(["name"], [["Azeite"]], lang)
-    assert text == "name: Azeite"
+@pytest.mark.parametrize(
+    ("lang", "expected"),
+    [("pt", "nome: Azeite"), ("PT-pt", "nome: Azeite"), (None, "name: Azeite"), ("en", "name: Azeite")],
+)
+def test_normalize_lang_paths(lang, expected):
+    assert format_sql_answer_deterministic(["name"], [["Azeite"]], lang) == expected
 
 
 def test_numbers_are_exact_and_never_rounded():
@@ -293,8 +295,15 @@ def test_numbers_are_exact_and_never_rounded():
     assert format_sql_answer_deterministic(["ok"], [[True]], "pt") == "ok: sim"
 
 
-@pytest.mark.parametrize("column", ["price", "preco", "valor", "total", "amount"])
+@pytest.mark.parametrize("column", ["price", "preco", "valor"])
 def test_no_currency_is_guessed_from_the_column_name(column):
+    text = format_sql_answer_deterministic(["name", column], [["Azeite", Decimal("8.90")]], "pt")
+    assert text == "Azeite — 8,90"
+    assert "€" not in text
+
+
+@pytest.mark.parametrize("column", ["total", "amount"])
+def test_count_like_columns_do_not_get_money_layout(column):
     text = format_sql_answer_deterministic(["name", column], [["Azeite", Decimal("8.90")]], "pt")
     assert text == "Azeite: 8,90"
     assert "€" not in text
@@ -344,7 +353,7 @@ def test_llm_reply_with_invented_values_falls_back(reply):
         "pt",
         llm_complete=lambda messages, *, temperature=0: reply,
     )
-    assert text == "Azeite: 8,90\nQueijo: 12"
+    assert text == "Azeite — 8,90\nQueijo — 12"
 
 
 def test_row_values_cannot_change_the_instructions():
@@ -377,7 +386,7 @@ def test_row_values_cannot_change_the_instructions():
 
 
 def test_one_row_label_is_readable_and_lists_have_no_labels():
-    assert format_sql_answer_deterministic(["unit_price"], [[Decimal("8.49")]], "pt") == "unit price: 8,49"
+    assert format_sql_answer_deterministic(["unit_price"], [[Decimal("8.49")]], "pt") == "preço: 8,49"
     rows = [["Azeite"], ["Queijo"]]
     assert format_sql_answer_deterministic(["name"], rows, "pt") == "Azeite\nQueijo"
 
@@ -408,7 +417,7 @@ def test_numbers_match_whole_tokens_only(reply):
         question="Quanto custa o queijo?",
         llm_complete=lambda messages, *, temperature=0: reply,
     )
-    assert text == "Queijo: 18,90"
+    assert text == "Queijo — 18,90"
 
 
 def test_question_subject_cannot_replace_the_returned_product():
@@ -420,7 +429,7 @@ def test_question_subject_cannot_replace_the_returned_product():
         question="Quanto custa o queijo?",
         llm_complete=lambda messages, *, temperature=0: "O queijo custa 8,90.",
     )
-    assert text == "Azeite da serra: 8,90"
+    assert text == "Azeite da serra — 8,90"
 
 
 def test_reply_that_drops_a_row_falls_back():
@@ -431,7 +440,7 @@ def test_reply_that_drops_a_row_falls_back():
         question="What do you sell?",
         llm_complete=lambda messages, *, temperature=0: "We have Azeite for 8.90.",
     )
-    assert text == "Azeite: 8.90\nQueijo: 12"
+    assert text == "Azeite — 8.90\nQueijo — 12"
 
 
 def test_link_in_reply_must_be_a_link_from_the_rows():
@@ -465,7 +474,7 @@ def _reply(text):
 
 def test_currency_only_on_money_columns_and_never_on_counts():
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt", currency="EUR") == (
-        "price: 8,49 €"
+        "preço: 8,49 €"
     )
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en", currency="EUR") == (
         "price: €8.49"
@@ -473,7 +482,7 @@ def test_currency_only_on_money_columns_and_never_on_counts():
     for column in ("total", "amount", "count", "stock"):
         assert format_sql_answer_deterministic([column], [[5]], "pt", currency="EUR") == f"{column}: 5"
     # No company currency: no symbol even for a price.
-    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "price: 8,49"
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "preço: 8,49"
 
 
 def test_reply_must_keep_every_price():
@@ -485,7 +494,7 @@ def test_reply_must_keep_every_price():
         question="Quanto custa o azeite?",
         llm_complete=_reply("Temos Azeite."),
     )
-    assert text == "Azeite: 8,49 €"
+    assert text == "Azeite — 8,49 €"
 
 
 @pytest.mark.parametrize(
@@ -509,7 +518,7 @@ def test_reply_cannot_add_another_currency_or_a_unit(reply):
         question="Quanto custa o azeite?",
         llm_complete=_reply(reply),
     )
-    assert text == "Azeite: 8,49 €"
+    assert text == "Azeite — 8,49 €"
 
 
 def test_configured_symbol_and_units_from_the_rows_are_accepted():
@@ -535,7 +544,7 @@ def test_pt_reply_with_a_decimal_point_falls_back_and_nothing_is_rewritten():
         question="Quanto custa o azeite?",
         llm_complete=_reply("O Azeite 0.75 L custa 8.49 €."),
     )
-    assert refused == "Azeite 0.75 L: 8,49 €"
+    assert refused == "Azeite 0.75 L — 8,49 €"
     # A number inside the product name is part of the name: kept exactly.
     kept = present_sql_answer(
         ["name", "price"],
@@ -578,7 +587,7 @@ def test_every_mention_of_the_amount_must_use_the_formatted_value(reply):
         question="Quanto custa o azeite?",
         llm_complete=lambda messages, *, temperature=0: reply,
     )
-    assert text == "Azeite: 8,49 €"
+    assert text == "Azeite — 8,49 €"
 
 
 def test_two_formatted_amounts_and_a_longer_one_containing_the_shorter():
@@ -614,3 +623,142 @@ def test_llm_gets_the_formatted_values_inside_escaped_rows():
     assert "8.49" not in user
     assert user.count("</rows>") == 1
     assert "8,49" not in seen[0][0]["content"]  # row data never in the system message
+
+
+def test_manual_price_fallback_pt_with_currency_and_no_id():
+    from datetime import time
+
+    text = format_sql_answer_deterministic(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+    )
+    assert text == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "8.49" not in text
+
+    hours = format_sql_answer_deterministic(
+        ["id", "opens", "closes"],
+        [[1, time(9, 0), time(19, 0)]],
+        "pt",
+    )
+    assert hours == "9h00 – 19h00"
+    assert "09:00:00" not in hours
+    assert not hours.startswith("1:")
+
+    store = format_sql_answer_deterministic(
+        ["id", "name", "city"],
+        [[1, "Mercearia Atlas - Arroios", "Lisboa"]],
+        "pt",
+    )
+    assert store == "Mercearia Atlas - Arroios: Lisboa"
+    assert "1:" not in store
+
+    cheap = format_sql_answer_deterministic(
+        ["id", "name", "price"],
+        [
+            [9, "Água mineral 1,5 L", Decimal("0.45")],
+            [5, "Arroz carolino 1 kg", Decimal("1.39")],
+        ],
+        "pt",
+        currency="EUR",
+    )
+    assert cheap.splitlines()[0] == "Água mineral 1,5 L — 0,45 €"
+    assert "9:" not in cheap
+    assert "0.45" not in cheap
+
+
+def test_validation_failure_logs_reason_without_values(caplog):
+    with caplog.at_level(logging.INFO, logger="site_ai_widget"):
+        text = present_sql_answer(
+            ["name", "price"],
+            [["Azeite Atlas Premium 750 ml", Decimal("8.49")]],
+            "pt",
+            currency="EUR",
+            question="Qual o preço do azeite?",
+            llm_complete=_reply("O preço do azeite é 8.49€."),
+        )
+    assert text == "Azeite Atlas Premium 750 ml — 8,49 €"
+    assert "detail=missing_formatted_amount" in caplog.text or "detail=unknown_number" in caplog.text
+    assert "8.49" not in caplog.text
+    assert "Azeite" not in caplog.text
+
+
+def test_llm_answer_with_full_product_name_passes():
+    reply = "O preço do Azeite Atlas Premium 750 ml é 8,49 €."
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=_reply(reply),
+    )
+    assert text == reply
+
+
+# --- times, dates, hidden ids, token matching ---------------------------------
+
+
+def test_times_drop_seconds_and_datetimes_keep_their_date():
+    from datetime import datetime, time
+
+    assert format_sql_answer_deterministic(["opens"], [[time(9, 0)]], "pt") == "abre: 9h00"
+    assert format_sql_answer_deterministic(["opens"], [["09:00:00"]], "en") == "opens: 09:00"
+    stamp = datetime(2026, 11, 24, 10, 30, 15)
+    assert format_sql_answer_deterministic(["created_at"], [[stamp]], "pt") == (
+        "created at: 2026-11-24 10h30"
+    )
+    assert format_sql_answer_deterministic(["created_at"], [[stamp]], "en") == (
+        "created at: 2026-11-24 10:30"
+    )
+
+
+def test_rows_with_only_id_columns_are_results_not_not_found():
+    rows = [[1, 7], [2, 9]]
+    assert format_sql_answer_deterministic(["id", "store_id"], rows, "pt") == "Encontrei 2 resultados."
+    assert format_sql_answer_deterministic(["id"], [[1]], "en") == "I found 1 result."
+    assert format_sql_answer_deterministic(["id"], [], "pt") == "Não encontrei essa informação."
+
+
+def test_id_columns_never_reach_the_answer_or_the_llm():
+    seen: list[str] = []
+
+    def fake(messages, *, temperature=0):
+        seen.append(messages[1]["content"])
+        return "O Azeite custa 8,49 €."
+
+    text = present_sql_answer(
+        ["id", "category_id", "name", "price"],
+        [[731, 42, "Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=fake,
+    )
+    assert text == "O Azeite custa 8,49 €."
+    assert "731" not in seen[0] and "42" not in seen[0]
+
+
+def test_single_row_may_shorten_the_name_but_several_rows_may_not():
+    shortened = present_sql_answer(
+        ["name", "price"],
+        [["Azeite Atlas Premium 750 ml", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=lambda messages, *, temperature=0: "O azeite Atlas Premium custa 8,49 €.",
+    )
+    assert shortened == "O azeite Atlas Premium custa 8,49 €."
+    # Two rows: "Atlas" and "Premium" could come from different products.
+    mixed = present_sql_answer(
+        ["name", "price"],
+        [["Azeite Atlas", Decimal("8.49")], ["Queijo Premium", Decimal("12")]],
+        "pt",
+        currency="EUR",
+        question="Preços?",
+        llm_complete=lambda messages, *, temperature=0: (
+            "O Azeite Premium custa 8,49 € e o Queijo Atlas custa 12 €."
+        ),
+    )
+    assert mixed == "Azeite Atlas — 8,49 €\nQueijo Premium — 12 €"

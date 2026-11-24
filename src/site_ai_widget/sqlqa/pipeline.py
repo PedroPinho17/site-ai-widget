@@ -109,10 +109,15 @@ def answer_with_sql(
                 company_id=company_id,
                 allowed=schema.allowed,
             )
-        if result.row_count == 0 and attempt < 2 and _has_text_equality(validated):
-            # Only a text filter can be "too exact"; a numeric or date filter that
-            # matched nothing is a real empty result and is not sent back to the LLM.
-            # Exact text equality (lower(name) = 'azeite') misses longer product names.
+        if result.row_count == 0 and attempt < 2 and (
+            _has_text_equality(validated)
+            or (_has_join(validated) and not _has_numeric_filter(validated))
+        ):
+            # Text equality or a join that matched nothing: rewrite once (ILIKE /
+            # multi-word / drop a join). A numeric filter that matched nothing
+            # (s.quantity > 0, price < 5) is a real empty result: it is never sent
+            # back, so a retry cannot drop the stock condition and list the product
+            # as if it were available.
             log.info("sqlqa/pipeline company=%s stage=no_rows attempts=%s", company_id, attempts)
             previous_error = retry_hint("no_rows")
             continue
@@ -223,6 +228,26 @@ def _parse(sql: str) -> exp.Expression | None:
 def _has_text_equality(sql: str) -> bool:
     tree = _parse(sql)
     return tree is not None and bool(_text_equalities(tree))
+
+
+_NUMERIC_COMPARISONS = (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.NEQ)
+
+
+def _has_numeric_filter(sql: str) -> bool:
+    """A WHERE / ON comparison against a number literal (quantity > 0, price <= 5)."""
+    tree = _parse(sql)
+    if tree is None:
+        return True  # unknown shape: do not retry
+    for node in tree.find_all(*_NUMERIC_COMPARISONS):
+        for side in (node.this, node.expression):
+            if isinstance(side, exp.Literal) and not side.is_string:
+                return True
+    return False
+
+
+def _has_join(sql: str) -> bool:
+    tree = _parse(sql)
+    return tree is not None and any(True for _ in tree.find_all(exp.Join))
 
 
 def _relax_text_match(sql: str, question: str) -> str | None:

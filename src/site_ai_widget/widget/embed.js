@@ -129,6 +129,63 @@
     return String(value);
   }
 
+  function stripCitations(text) {
+    return String(text || "")
+      .replace(/[ \t]*(?:【\d+】|\[\d+\])/g, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
+  }
+
+  function appendInline(parent, text) {
+    var pattern = /\*\*(.+?)\*\*|__(.+?)__/g;
+    var last = 0;
+    var match;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > last) {
+        parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+      }
+      var strong = document.createElement("strong");
+      strong.textContent = match[1] || match[2] || "";
+      parent.appendChild(strong);
+      last = match.index + match[0].length;
+    }
+    if (last < text.length) {
+      parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+  }
+
+  /* Bold, lists and line breaks via DOM nodes only. Never assign HTML from replies. */
+  function renderSafeMarkdown(text) {
+    var root = document.createElement("div");
+    root.className = "md";
+    var lines = stripCitations(text).split("\n");
+    var list = null;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var bullet = line.match(/^\s*[-*]\s+(.+)$/);
+      if (bullet) {
+        if (!list) {
+          list = document.createElement("ul");
+          root.appendChild(list);
+        }
+        var li = document.createElement("li");
+        appendInline(li, bullet[1]);
+        list.appendChild(li);
+        continue;
+      }
+      list = null;
+      if (!line.trim()) {
+        root.appendChild(document.createElement("br"));
+        continue;
+      }
+      var p = document.createElement("p");
+      appendInline(p, line);
+      root.appendChild(p);
+    }
+    return root;
+  }
+
   function formatAnswer(data) {
     var lines = [];
     var mode = data && data.mode;
@@ -494,9 +551,13 @@
     _add(role, text, chips) {
       var item = document.createElement("div");
       item.className = role === "user" ? "msg user" : "msg assistant";
-      var paragraph = document.createElement("p");
-      paragraph.textContent = text;
-      item.appendChild(paragraph);
+      if (role === "assistant") {
+        item.appendChild(renderSafeMarkdown(text));
+      } else {
+        var paragraph = document.createElement("p");
+        paragraph.textContent = text;
+        item.appendChild(paragraph);
+      }
       if (chips && chips.length) {
         var row = document.createElement("div");
         row.className = "chips";
@@ -733,7 +794,10 @@
     "  border-radius: 8px; cursor: pointer; }",
     ".log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; background: #f8faf9; }",
     ".msg { max-width: 85%; padding: 8px 10px; border-radius: 12px; }",
-    ".msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.4; }",
+    ".msg p, .msg .md { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.4; }",
+    ".msg .md p { margin: 0 0 4px; }",
+    ".msg .md ul { margin: 0 0 4px; padding-left: 1.2em; }",
+    ".msg .md li { margin: 0; }",
     ".msg.user { align-self: flex-end; background: #ccfbf1; color: #134e4a; }",
     ".msg.assistant { align-self: flex-start; background: #fff; color: #14221f; border: 1px solid #d9e4e0; }",
     ".chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }",

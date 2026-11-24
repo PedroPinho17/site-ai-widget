@@ -7,6 +7,7 @@ import {
   sourceChips,
   testAssistantRequest,
 } from "@/lib/api";
+import { SafeMarkdown } from "@/lib/safe-markdown";
 
 const EXAMPLES = ["Qual o preço do azeite?", "Qual o horário de abertura?", "Olá"];
 
@@ -116,7 +117,11 @@ export function TestAssistantPage() {
                   : "max-w-[80%] self-start rounded-2xl border border-border bg-card px-3 py-2"
               }
             >
-              <p className="whitespace-pre-wrap text-sm">{message.text}</p>
+              {message.role === "assistant" ? (
+                <SafeMarkdown text={message.text} />
+              ) : (
+                <p className="whitespace-pre-wrap text-sm">{message.text}</p>
+              )}
               {message.chips.length ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {message.chips.map((chip, index) => (

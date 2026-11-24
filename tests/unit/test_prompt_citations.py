@@ -19,6 +19,13 @@ def _chunk(**overrides):
     return base
 
 
+def test_system_asks_for_european_portuguese():
+    system = build_messages("Onde?", [_chunk()])[0]["content"]
+    assert "European Portuguese" in system or "Portugal" in system
+    assert "você" in system.lower()
+    assert "telemóvel" in system
+
+
 def test_excerpts_delimited_and_untrusted():
     messages = build_messages("Estao abertos ao domingo?", [_chunk()])
     assert messages[0]["role"] == "system"

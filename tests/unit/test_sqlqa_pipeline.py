@@ -504,6 +504,50 @@ def test_relaxed_query_on_an_unapproved_table_is_dropped(monkeypatch):
     assert gens["n"] == 2  # the one LLM retry, never more
 
 
+def test_empty_join_retries_once_with_simpler_hint(monkeypatch):
+    previous: list[object] = []
+    runs = {"n": 0}
+
+    def gen(question, schema, **kwargs):
+        previous.append(kwargs.get("previous_error"))
+        if kwargs.get("previous_error"):
+            return (
+                "SELECT p.name, s.quantity FROM products AS p "
+                "JOIN stock AS s ON s.product_id = p.id "
+                "WHERE p.name ILIKE '%pao%' AND p.name ILIKE '%milho%' LIMIT 10"
+            )
+        return (
+            "SELECT p.name, s.quantity FROM products AS p "
+            "JOIN stock AS s ON s.product_id = p.id "
+            "WHERE p.name ILIKE '%pao de milho%' LIMIT 10"
+        )
+
+    def run(sql, **kwargs):
+        runs["n"] += 1
+        if "AND" in sql.upper():
+            return RunResult(
+                columns=["name", "quantity"],
+                rows=[["Pão de milho", 18]],
+                row_count=1,
+                truncated=False,
+                elapsed_ms=1,
+            )
+        return RunResult(
+            columns=["name", "quantity"], rows=[], row_count=0, truncated=False, elapsed_ms=1
+        )
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(pipeline, "run_sql", run)
+
+    out = answer_with_sql(COMPANY, "Têm pão de milho em stock?")
+    assert out.status == "ok"
+    assert out.row_count == 1
+    assert out.rows == [["Pão de milho", 18]]
+    assert previous[1] == retry_hint("no_rows")
+    assert runs["n"] == 2
+
+
 def test_no_rows_retry_runs_at_most_once(monkeypatch):
     gens = {"n": 0}
 
@@ -523,3 +567,46 @@ def test_no_rows_retry_runs_at_most_once(monkeypatch):
     assert out.row_count == 0
     assert out.attempts == 2
     assert gens["n"] == 2
+
+
+def test_empty_stock_filter_is_not_retried_without_the_condition(monkeypatch):
+    """quantity > 0 matched nothing: a real "not in stock", never retried into a plain product list."""
+    gens = {"n": 0}
+
+    def gen(*a, **k):
+        gens["n"] += 1
+        return (
+            "SELECT p.name FROM products AS p JOIN stock AS s ON s.product_id = p.id "
+            "WHERE p.name ILIKE '%batata%' AND s.quantity > 0 LIMIT 10"
+        )
+
+    monkeypatch.setattr(pipeline, "generate_sql", gen)
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+    monkeypatch.setattr(
+        pipeline,
+        "run_sql",
+        lambda *a, **k: RunResult(columns=["name"], rows=[], row_count=0, truncated=False, elapsed_ms=1),
+    )
+    out = answer_with_sql(COMPANY, "Têm batata nova em stock?")
+    assert out.status == "ok"
+    assert out.row_count == 0
+    assert gens["n"] == 1
+
+
+def test_failed_stock_query_is_an_error_not_an_empty_result(monkeypatch):
+    """A query that fails twice is status=error: the answer layer never reads it as 0 in stock."""
+    monkeypatch.setattr(
+        pipeline,
+        "generate_sql",
+        lambda *a, **k: "SELECT p.name, s.quantity FROM products AS p JOIN stock AS s ON s.product_id = p.id LIMIT 10",
+    )
+    monkeypatch.setattr(pipeline, "validate_sql", lambda sql, allowed: sql)
+
+    def run(*a, **k):
+        raise RunnerError("db_error")
+
+    monkeypatch.setattr(pipeline, "run_sql", run)
+    out = answer_with_sql(COMPANY, "Têm pão de milho em stock?")
+    assert out.status == "error"
+    assert out.rows == []
+    assert out.attempts == 2

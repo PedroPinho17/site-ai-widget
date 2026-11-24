@@ -65,7 +65,8 @@ INSERT INTO products (category_id, sku, name, unit, price) VALUES
     (2, 'ATL-0007', 'Leite meio-gordo 1 L',                   'un', 0.89),
     (2, 'ATL-0008', 'Iogurte natural (pack 4)',               'un', 1.79),
     (3, 'ATL-0009', 'Água mineral 1,5 L',                     'un', 0.45),
-    (1, 'ATL-0010', 'Batata nova',                            'kg', 1.19);
+    (1, 'ATL-0010', 'Batata nova',                            'kg', 1.19),
+    (1, 'ATL-0011', 'Pão de milho',                           'un', 1.20);
 
 INSERT INTO stores (name, city, address, phone) VALUES
     ('Mercearia Atlas - Arroios', 'Lisboa',
@@ -83,7 +84,8 @@ INSERT INTO opening_hours (store_id, weekday, opens, closes) VALUES
 
 INSERT INTO stock (store_id, product_id, quantity) VALUES
     (1, 1, 24), (1, 2, 6),  (1, 3, 40), (1, 4, 12), (1, 5, 80),
-    (1, 6, 65), (1, 7, 50), (1, 8, 30), (1, 9, 120), (1, 10, 0);
+    (1, 6, 65), (1, 7, 50), (1, 8, 30), (1, 9, 120), (1, 10, 0),
+    (1, 11, 18);
 
 INSERT INTO customers (name, email, nif, city) VALUES
     ('Cliente Exemplo Um',   'cliente1@example.com', '000000001', 'Lisboa'),

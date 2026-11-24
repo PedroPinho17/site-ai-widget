@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -27,6 +28,10 @@ _MAX_QUESTION_CHARS = 500
 _NOT_FOUND = {
     "pt": "Não encontrei essa informação.",
     "en": "I could not find that.",
+}
+_FOUND_N = {
+    "pt": lambda n: "Encontrei 1 resultado." if n == 1 else f"Encontrei {n} resultados.",
+    "en": lambda n: "I found 1 result." if n == 1 else f"I found {n} results.",
 }
 _MORE = {
     "pt": "e mais {n}",
@@ -55,6 +60,23 @@ _UNIT_AFTER_NUMBER = re.compile(
 )
 _CURRENCY_SYMBOL = {"EUR": "€", "USD": "$", "GBP": "£", "BRL": "R$"}
 _NUMERIC_CELL = re.compile(r"^(?:€|£|\$|R\$)?\s*\d+(?:[.,]\d+)*\s*(?:€|£|\$|R\$)?$")
+_TIME_STRING = re.compile(r"^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$")
+_ALPHA_TOKEN = re.compile(r"[^\W\d_]{4,}", re.UNICODE)
+_COLUMN_LABEL_PT = {
+    "price": "preço",
+    "preco": "preço",
+    "unit_price": "preço",
+    "valor": "valor",
+    "cost": "custo",
+    "custo": "custo",
+    "name": "nome",
+    "opens": "abre",
+    "closes": "fecha",
+    "quantity": "quantidade",
+    "city": "cidade",
+    "address": "morada",
+    "phone": "telefone",
+}
 
 _SYSTEM = (
     "You are a helpful shop assistant chat widget. "
@@ -72,7 +94,10 @@ _SYSTEM = (
     "{currency_rule}"
 )
 
-_LANG_NAME = {"pt": "Portuguese (Portugal)", "en": "English"}
+_LANG_NAME = {
+    "pt": "European Portuguese (Portugal): use contactar, telemóvel; never Brazilian você",
+    "en": "English",
+}
 
 
 def normalize_lang(lang: str | None) -> Lang:
@@ -83,6 +108,11 @@ def normalize_lang(lang: str | None) -> Lang:
 
 def _column_key(column: str | None) -> str:
     return (column or "").strip().lower().replace("ç", "c").replace(" ", "_")
+
+
+def _is_id_column(column: str | None) -> bool:
+    key = _column_key(column)
+    return key == "id" or key.endswith("_id")
 
 
 def _is_money(column: str | None) -> bool:
@@ -104,6 +134,23 @@ def _with_currency(number: str, *, lang: Lang, column: str | None, currency: str
     return f"{symbol}{number}"
 
 
+def _format_time(hour: int, minute: int, lang: Lang) -> str:
+    if lang == "pt":
+        return f"{hour}h{minute:02d}"
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _as_time_parts(value: Any) -> tuple[int, int] | None:
+    """Hour and minute of a time of day. A datetime is not a time: its date matters."""
+    if isinstance(value, time):
+        return value.hour, value.minute
+    if isinstance(value, str):
+        match = _TIME_STRING.match(value.strip())
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None
+
+
 def format_cell(
     value: Any,
     *,
@@ -117,12 +164,17 @@ def format_cell(
         if lang == "pt":
             return "sim" if value else "não"
         return "yes" if value else "no"
+    if isinstance(value, datetime):
+        # Keep the date: dropping it would turn "2026-11-24 10:30" into a bare time.
+        return f"{value.date().isoformat()} {_format_time(value.hour, value.minute, lang)}"
+    parts = _as_time_parts(value)
+    if parts is not None:
+        return _format_time(parts[0], parts[1], lang)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
     if isinstance(value, (Decimal, float, int)):
-        # The exact stored value: no rounding. A symbol only for money columns
-        # when this company configured a currency.
         number = _format_number(value, lang)
         return _with_currency(number, lang=lang, column=column, currency=currency)
-    # One line per cell: a value with newlines must not fake extra list items.
     text = _WS.sub(" ", str(value)).strip()
     if len(text) > _MAX_CELL_CHARS:
         text = text[: _MAX_CELL_CHARS - 1] + "…"
@@ -142,9 +194,28 @@ def _format_number(value: Decimal | float | int, lang: Lang) -> str:
     return raw
 
 
-def _label(column: str) -> str:
-    """Readable column label: ``unit_price`` -> ``unit price``."""
+def _label(column: str, lang: Lang) -> str:
+    key = _column_key(column)
+    if lang == "pt" and key in _COLUMN_LABEL_PT:
+        return _COLUMN_LABEL_PT[key]
     return _WS.sub(" ", column.replace("_", " ")).strip()
+
+
+def _visible_pairs(
+    columns: list[str],
+    row: list[Any],
+    lang: Lang,
+    currency: str | None,
+) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for i, col in enumerate(columns):
+        if _is_id_column(col):
+            continue
+        cell = row[i] if i < len(row) else None
+        text = format_cell(cell, lang=lang, column=col, currency=currency)
+        if text:
+            pairs.append((col, text))
+    return pairs
 
 
 def format_row(
@@ -155,18 +226,20 @@ def format_row(
     label_single: bool = False,
     currency: str | None = None,
 ) -> str:
-    pairs: list[tuple[str, str]] = []
-    for i, col in enumerate(columns):
-        cell = row[i] if i < len(row) else None
-        text = format_cell(cell, lang=lang, column=col, currency=currency)
-        if text:
-            pairs.append((col, text))
+    pairs = _visible_pairs(columns, row, lang, currency)
     if not pairs:
         return ""
     if len(pairs) == 1:
-        # A one-row, one-value answer gets its label so a lone price is not a bare
-        # number. List lines stay values only; repeating the label is just noise.
-        return f"{_label(pairs[0][0])}: {pairs[0][1]}" if label_single else pairs[0][1]
+        return f"{_label(pairs[0][0], lang)}: {pairs[0][1]}" if label_single else pairs[0][1]
+    money = [(col, text) for col, text in pairs if _is_money(col)]
+    others = [(col, text) for col, text in pairs if not _is_money(col)]
+    if len(money) == 1 and others:
+        head = " · ".join(text for _, text in others)
+        return f"{head} — {money[0][1]}"
+    keys = {_column_key(col) for col, _ in pairs}
+    if keys == {"opens", "closes"} and len(pairs) == 2:
+        by_key = {_column_key(col): text for col, text in pairs}
+        return f"{by_key['opens']} – {by_key['closes']}"
     head = pairs[0][1]
     rest = ", ".join(text for _, text in pairs[1:])
     return f"{head}: {rest}"
@@ -198,7 +271,9 @@ def format_sql_answer_deterministic(
         if line:
             lines.append(line)
     if not lines:
-        return _NOT_FOUND[locale]
+        # Rows came back, but every column was hidden (id / *_id). That is not
+        # "nothing found": say how many results there are, without the ids.
+        return _FOUND_N[locale](len(rows))
     more = _more_line(rows, locale, truncated)
     if more:
         lines.append(more)
@@ -216,6 +291,8 @@ def _rows_for_llm(
     for row in rows[:_MAX_LLM_ROWS]:
         item: dict[str, str] = {}
         for i, col in enumerate(cols):
+            if _is_id_column(col):
+                continue
             cell = row[i] if i < len(row) else None
             text = format_cell(cell, lang=lang, column=col, currency=currency)
             if text:
@@ -235,8 +312,8 @@ def _currency_rule(currency: str | None) -> str:
     if not symbol:
         return "Do not add a currency symbol or a unit."
     return (
-        f"You may place the currency symbol {symbol} next to money amounts. "
-        "Do not use any other currency symbol or unit."
+        f"Money amounts are already formatted with {symbol}. Copy them exactly "
+        "(including spaces). Do not use any other currency symbol or unit."
     )
 
 
@@ -282,57 +359,68 @@ def _no_new_units(text: str, source: str) -> bool:
     return True
 
 
-def _llm_answer_ok(
+def _text_value_ok(value: str, folded_reply: str, *, single_row: bool) -> bool:
+    """Full value; with one row only, every alphabetic token of length >= 4 is enough.
+
+    With several rows the full value is required: matching words one by one could
+    take "Azeite" from one row and "Premium" from another and still pass.
+    """
+    if value.casefold() in folded_reply:
+        return True
+    if not single_row:
+        return False
+    tokens = _ALPHA_TOKEN.findall(value.casefold())
+    if not tokens:
+        return value.casefold() in folded_reply
+    return all(token in folded_reply for token in tokens)
+
+
+def _llm_answer_fail(
     text: str,
     *,
     fallback: str,
     payload: list[dict[str, str]],
     currency: str | None = None,
-) -> bool:
+) -> str | None:
+    """Return a short reason code when the reply is refused; None when it is ok."""
     cleaned = (text or "").strip()
     if not cleaned or len(cleaned) > _MAX_ANSWER_CHARS:
-        return False
-    # Keep the model from inventing a long sales pitch around a short result.
+        return "empty_or_long"
     if len(cleaned) > max(len(fallback) + 120, len(fallback) * 4, 200):
-        return False
+        return "too_long"
     lower = cleaned.lower()
     if "select " in lower or "```" in cleaned:
-        return False
+        return "sql_shaped"
     if re.search(r"\b(from|join|where)\s+\w+", lower):
-        return False
+        return "sql_shaped"
     values = [value for item in payload for value in item.values()]
     source = " ".join(values)
-    # Numbers are compared exactly as the rows were formatted for this language,
-    # so a pt reply that writes "8.49" for "8,49" is refused, and nothing in the
-    # reply is ever rewritten (a "0.75" inside a product name or link stays).
     allowed_numbers = set(_NUMBER.findall(source))
     reply_numbers = _NUMBER.findall(cleaned)
     if any(match not in allowed_numbers for match in reply_numbers):
-        return False
-    # Every number from a numeric cell must be in the reply: a price cannot be dropped.
+        return "unknown_number"
     present = set(reply_numbers)
     for value in values:
         if _NUMERIC_CELL.match(value.strip()) and not set(_NUMBER.findall(value)) <= present:
-            return False
+            return "missing_number"
     if not _currency_symbols_ok(cleaned, currency):
-        return False
-    # The formatted amount must appear unchanged ("8,49 €", not "8.49€" or "8,49€"),
-    # and every other mention of that number must be gone too: "8,49 € (8,49€)"
-    # would otherwise pass because the right form appears once.
+        return "bad_currency"
     folded = cleaned.casefold()
     numeric_values = [value.strip() for value in values if _NUMERIC_CELL.match(value.strip())]
     if any(value.casefold() not in folded for value in numeric_values):
-        return False
+        return "missing_formatted_amount"
     if not _amounts_only_as_formatted(cleaned, numeric_values):
-        return False
+        return "reformatted_amount"
     if not _no_new_units(cleaned, source):
-        return False
+        return "new_unit"
     links = {_strip_link(match) for match in _LINK.findall(source)}
     if any(_strip_link(match) not in links for match in _LINK.findall(cleaned)):
-        return False
-    # Every non-numeric value we sent must appear, so a reply cannot rename the product.
+        return "unknown_link"
     text_values = [value for value in values if not _NUMERIC_CELL.match(value.strip())]
-    return all(value.casefold() in folded for value in text_values)
+    single_row = len(payload) == 1
+    if not all(_text_value_ok(value, folded, single_row=single_row) for value in text_values):
+        return "missing_text"
+    return None
 
 
 def _strip_link(text: str) -> str:
@@ -415,11 +503,16 @@ def present_sql_answer(
 
     text = (raw or "").strip()
     more = _more_line(rows, locale, truncated)
-    # The model only saw the first rows: compare against those, then tell the
-    # visitor how many more there are, exactly like the deterministic list.
     shown = fallback if more is None else fallback.rsplit("\n", 1)[0]
-    if not _llm_answer_ok(text, fallback=shown, payload=payload, currency=currency):
-        log.info("sqlqa/present stage=fallback reason=validation rows=%s", row_count)
+    reason = _llm_answer_fail(text, fallback=shown, payload=payload, currency=currency)
+    if reason is not None:
+        log.info(
+            "sqlqa/present stage=fallback reason=validation detail=%s rows=%s currency=%s lang=%s",
+            reason,
+            row_count,
+            bool(currency),
+            locale,
+        )
         return fallback
     log.info("sqlqa/present stage=llm validation=pass rows=%s", row_count)
     return text if more is None else f"{text}\n{more}"

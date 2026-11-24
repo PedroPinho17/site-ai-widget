@@ -327,7 +327,8 @@ def test_question_keeps_ampersand_and_quotes_but_neutralizes_angles():
 def test_system_rules_list_the_validator_limits():
     system = build_sql_messages("q", PRODUCTS)[0]["content"]
     for rule in ("SIMILAR TO", "array_agg", "string_agg", "NATURAL JOIN", "OFFSET above 10000",
-                 "schema.func", "(x).f", "Never SELECT *", "LIMIT", "ILIKE", NO_SQL, "untrusted data"):
+                 "schema.func", "(x).f", "Never SELECT *", "LIMIT", "ILIKE", "AND",
+                 "id or *_id", NO_SQL, "untrusted data"):
         assert rule in system
 
 

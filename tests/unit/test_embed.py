@@ -222,6 +222,66 @@ def test_focus_trap_only_cycles_inside_the_panel():
     assert "this._root.querySelectorAll" not in body
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_safe_markdown_strips_citations_and_renders_bold():
+    import json
+
+    source = _js()
+    assert "function stripCitations(text)" in source
+    assert "function renderSafeMarkdown(text)" in source
+    assert "appendInline" in source
+    start = source.index("  function stripCitations(text) {")
+    end = source.index("\n  function formatAnswer(data) {")
+    helpers = source[start:end]
+    assert ".innerHTML" not in helpers
+    assert "innerHTML =" not in helpers
+    script = (
+        "function el(tag) {\n"
+        "  var node = { tagName: String(tag).toUpperCase(), childNodes: [], className: '', _text: null };\n"
+        "  Object.defineProperty(node, 'textContent', {\n"
+        "    get: function () {\n"
+        "      if (this._text != null) return this._text;\n"
+        "      return this.childNodes.map(function (n) {\n"
+        "        return n.nodeValue != null ? n.nodeValue : n.textContent;\n"
+        "      }).join('');\n"
+        "    },\n"
+        "    set: function (v) { this._text = String(v); this.childNodes = []; }\n"
+        "  });\n"
+        "  Object.defineProperty(node, 'innerHTML', {\n"
+        "    get: function () {\n"
+        "      if (this._text != null) return this._text;\n"
+        "      return this.childNodes.map(function (n) {\n"
+        "        if (n.nodeValue != null) return n.nodeValue;\n"
+        "        return '<' + n.tagName.toLowerCase() + '>' + n.innerHTML + '</' + n.tagName.toLowerCase() + '>';\n"
+        "      }).join('');\n"
+        "    }\n"
+        "  });\n"
+        "  node.appendChild = function (n) { this.childNodes.push(n); return n; };\n"
+        "  return node;\n"
+        "}\n"
+        "var document = { createElement: el, createTextNode: function (t) { return { nodeValue: t }; } };\n"
+        + helpers
+        + "\nvar out = renderSafeMarkdown('**Contacte-nos**\\n- Rua\\n【1】');\n"
+        + "process.stdout.write(JSON.stringify({html: out.innerHTML, text: out.textContent, "
+        + "stripped: stripCitations('Abrimos 【1】 e [2].')}));"
+    )
+    result = subprocess.run(
+        [shutil.which("node"), "-e", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    body = json.loads(result.stdout)
+    assert "Contacte-nos" in body["text"]
+    assert "Rua" in body["text"]
+    assert "【1】" not in body["text"]
+    assert "<strong>" in body["html"]
+    assert "【1】" not in body["stripped"]
+    assert "[2]" not in body["stripped"]
+
+
 def test_format_answer_prefers_server_answer_for_sql():
     text = _js()
     assert 'typeof data.answer === "string" && data.answer' in text
@@ -334,3 +394,48 @@ def test_demo_origin_allowed_and_other_origin_refused(monkeypatch, demo_key_rest
     assert allowed.status_code == 200
     assert allowed.json()["mode"] == "sql"
     assert calls == [1]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_markdown_renders_html_in_replies_as_plain_text_and_tidies_citations():
+    """Runs renderSafeMarkdown with a recording DOM stub: only p/ul/li/strong/br nodes."""
+    import json
+
+    source = _js()
+    start = source.index("  function stripCitations(text) {")
+    end = source.index("\n  function formatAnswer(data) {")
+    helpers = source[start:end]
+    script = (
+        "var made = [];\n"
+        "function el(tag) {\n"
+        "  made.push(String(tag).toLowerCase());\n"
+        "  return { tagName: String(tag).toUpperCase(), childNodes: [], className: '',\n"
+        "    appendChild: function (n) { this.childNodes.push(n); return n; },\n"
+        "    set textContent(v) { this.childNodes = [{ nodeValue: String(v) }]; } };\n"
+        "}\n"
+        "function text(node) {\n"
+        "  if (node.nodeValue != null) return node.nodeValue;\n"
+        "  return node.childNodes.map(text).join('');\n"
+        "}\n"
+        "var document = { createElement: el, createTextNode: function (t) { return { nodeValue: t }; } };\n"
+        + helpers
+        + "\nvar evil = '<img src=x onerror=alert(1)> **<script>x</script>**\\n- <b>Rua</b>';\n"
+        + "var out = renderSafeMarkdown(evil);\n"
+        + "process.stdout.write(JSON.stringify({made: made, text: text(out), "
+        + "tidy: stripCitations('Abrimos às 9h 【1】 e aos sábados [2].')}));"
+    )
+    result = subprocess.run(
+        [shutil.which("node"), "-e", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    body = json.loads(result.stdout)
+    assert set(body["made"]) <= {"div", "p", "ul", "li", "strong", "br"}
+    # The markup is visible as text, never parsed into elements.
+    assert "<img src=x onerror=alert(1)>" in body["text"]
+    assert "<script>x</script>" in body["text"]
+    assert "<b>Rua</b>" in body["text"]
+    assert body["tidy"] == "Abrimos às 9h e aos sábados."
