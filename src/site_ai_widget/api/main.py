@@ -15,6 +15,7 @@ from site_ai_widget.api.panel_cors import PanelCorsMiddleware
 from site_ai_widget.api.routes import (
     ask,
     ask_docs,
+    assistant,
     auth_routes,
     company,
     db_connection,
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(ask_docs.router)
     app.include_router(ask.router)
+    app.include_router(assistant.router)
     app.include_router(db_connection.router)
     return app
 

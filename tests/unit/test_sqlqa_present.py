@@ -23,6 +23,52 @@ def test_one_row_pt_name_and_price():
     assert "SELECT" not in text
 
 
+def test_currency_only_on_money_columns_and_only_when_set():
+    with_eur = format_sql_answer_deterministic(
+        ["name", "price", "unit"],
+        [["Azeite", Decimal("8.49"), "un"]],
+        "pt",
+        currency="EUR",
+    )
+    assert with_eur == "Azeite: 8,49 €, un"
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en", currency="EUR") == (
+        "price: €8.49"
+    )
+    unset = format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt")
+    assert unset == "price: 8,49"
+    assert "€" not in unset
+    stock = format_sql_answer_deterministic(["quantity"], [[3]], "pt", currency="EUR")
+    assert stock == "quantity: 3"
+    assert "€" not in stock
+
+
+def test_pt_reply_normalizes_dot_decimals_and_accepts_configured_symbol():
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=lambda messages, *, temperature=0: "O Azeite custa €8.49.",
+    )
+    assert "8.49" not in text
+    assert "8,49" in text
+    assert "€" in text
+
+
+def test_other_currency_symbol_is_rejected():
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Qual o preço do azeite?",
+        llm_complete=lambda messages, *, temperature=0: "O Azeite custa $8.49.",
+    )
+    assert text == "Azeite: 8,49 €"
+    assert "$" not in text
+
+
 def test_one_row_single_column_includes_label_pt_and_en():
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "price: 8,49"
     assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en") == "price: 8.49"
@@ -373,3 +419,108 @@ def test_link_in_reply_must_be_a_link_from_the_rows():
         ),
     )
     assert bad == "Loja: https://loja.example/azeite"
+
+
+# --- currency, units and exact numbers -------------------------------------
+
+
+def _reply(text):
+    return lambda messages, *, temperature=0: text
+
+
+def test_currency_only_on_money_columns_and_never_on_counts():
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt", currency="EUR") == (
+        "price: 8,49 €"
+    )
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "en", currency="EUR") == (
+        "price: €8.49"
+    )
+    for column in ("total", "amount", "count", "stock"):
+        assert format_sql_answer_deterministic([column], [[5]], "pt", currency="EUR") == f"{column}: 5"
+    # No company currency: no symbol even for a price.
+    assert format_sql_answer_deterministic(["price"], [[Decimal("8.49")]], "pt") == "price: 8,49"
+
+
+def test_reply_must_keep_every_price():
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Quanto custa o azeite?",
+        llm_complete=_reply("Temos Azeite."),
+    )
+    assert text == "Azeite: 8,49 €"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "O Azeite custa 8,49 USD.",
+        "O Azeite custa 8,49 euros.",
+        "O Azeite custa 8,49 EUR.",
+        "O Azeite custa US$8,49.",
+        "O Azeite custa $8,49.",
+        "O Azeite custa 8,49 kg.",
+        "O Azeite custa 8,49 € por 1 l.",
+    ],
+)
+def test_reply_cannot_add_another_currency_or_a_unit(reply):
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Quanto custa o azeite?",
+        llm_complete=_reply(reply),
+    )
+    assert text == "Azeite: 8,49 €"
+
+
+def test_configured_symbol_and_units_from_the_rows_are_accepted():
+    reply = "O Azeite 500 ml custa €8,49."
+    text = present_sql_answer(
+        ["name", "price"],
+        [["Azeite 500 ml", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Quanto custa o azeite?",
+        llm_complete=_reply(reply),
+    )
+    assert text == reply
+
+
+def test_pt_reply_with_a_decimal_point_falls_back_and_nothing_is_rewritten():
+    rows = [["Azeite 0.75 L", Decimal("8.49")]]
+    refused = present_sql_answer(
+        ["name", "price"],
+        rows,
+        "pt",
+        currency="EUR",
+        question="Quanto custa o azeite?",
+        llm_complete=_reply("O Azeite 0.75 L custa 8.49 €."),
+    )
+    assert refused == "Azeite 0.75 L: 8,49 €"
+    # A number inside the product name is part of the name: kept exactly.
+    kept = present_sql_answer(
+        ["name", "price"],
+        rows,
+        "pt",
+        currency="EUR",
+        question="Quanto custa o azeite?",
+        llm_complete=_reply("O Azeite 0.75 L custa 8,49 €."),
+    )
+    assert kept == "O Azeite 0.75 L custa 8,49 €."
+
+
+def test_links_in_values_are_not_rewritten():
+    reply = "Veja a Loja em https://loja.example/p/1.5 por 8,49 €."
+    text = present_sql_answer(
+        ["name", "url", "price"],
+        [["Loja", "https://loja.example/p/1.5", Decimal("8.49")]],
+        "pt",
+        currency="EUR",
+        question="Onde compro?",
+        llm_complete=_reply(reply),
+    )
+    assert text == reply

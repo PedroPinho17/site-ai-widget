@@ -40,6 +40,7 @@ DEMOS = (
         "greeting": "Bem-vindo à Mercearia Atlas! Em que posso ajudar?",
         "assistant_name": "Atlas",
         "primary_color": "#0f766e",
+        "currency": "EUR",
         "pdf": "mercearia-atlas-manual.pdf",
         "pdf_display": "Mercearia Atlas - Manual do Cliente.pdf",
     },
@@ -267,9 +268,10 @@ def _ensure_admin_and_settings(conn, company_id, demo: dict, password: str) -> N
     conn.execute(
         """
         INSERT INTO widget_settings
-            (company_id, primary_color, greeting, locale, assistant_name)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (company_id) DO NOTHING
+            (company_id, primary_color, greeting, locale, assistant_name, currency)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (company_id) DO UPDATE
+            SET currency = COALESCE(widget_settings.currency, EXCLUDED.currency)
         """,
         (
             str(company_id),
@@ -277,6 +279,7 @@ def _ensure_admin_and_settings(conn, company_id, demo: dict, password: str) -> N
             demo["greeting"],
             demo["locale"],
             demo["assistant_name"],
+            demo.get("currency"),
         ),
     )
 
@@ -321,8 +324,8 @@ def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> li
                 conn.execute(
                     """
                     INSERT INTO widget_settings
-                        (company_id, primary_color, greeting, locale, assistant_name)
-                    VALUES (%s, %s, %s, %s, %s)
+                        (company_id, primary_color, greeting, locale, assistant_name, currency)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         company_id,
@@ -330,6 +333,7 @@ def seed(database_url: str | None = None, demos: tuple[dict, ...] = DEMOS) -> li
                         demo["greeting"],
                         demo["locale"],
                         demo["assistant_name"],
+                        demo.get("currency"),
                     ),
                 )
                 created.append(demo["slug"])

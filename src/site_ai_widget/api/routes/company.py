@@ -75,7 +75,7 @@ def get_widget_settings(user: dict = Depends(panel_user)) -> WidgetSettingsRespo
     with connection() as conn:
         row = conn.execute(
             """
-            SELECT company_id, primary_color, greeting, locale, position, assistant_name
+            SELECT company_id, primary_color, greeting, locale, position, assistant_name, currency
             FROM widget_settings WHERE company_id = %s
             """,
             (str(user["company_id"]),),
@@ -89,6 +89,19 @@ def get_widget_settings(user: dict = Depends(panel_user)) -> WidgetSettingsRespo
         locale=row[3],
         position=row[4],
         assistant_name=row[5],
+        currency=row[6],
+    )
+
+
+def _settings_from_row(row) -> WidgetSettingsResponse:
+    return WidgetSettingsResponse(
+        company_id=row[0],
+        primary_color=row[1],
+        greeting=row[2],
+        locale=row[3],
+        position=row[4],
+        assistant_name=row[5],
+        currency=row[6],
     )
 
 
@@ -97,7 +110,9 @@ def update_widget_settings(
     body: WidgetSettingsUpdate,
     user: dict = Depends(require_admin),
 ) -> WidgetSettingsResponse:
-    changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    # currency may be cleared (null). Other fields ignore null.
+    raw = body.model_dump(exclude_unset=True)
+    changes = {key: value for key, value in raw.items() if value is not None or key == "currency"}
     if not changes:
         return get_widget_settings(user)
     cols = list(changes)
@@ -109,20 +124,13 @@ def update_widget_settings(
             f"""
             UPDATE widget_settings SET {sets}
             WHERE company_id = %s
-            RETURNING company_id, primary_color, greeting, locale, position, assistant_name
+            RETURNING company_id, primary_color, greeting, locale, position, assistant_name, currency
             """,
             params,
         ).fetchone()
     if not row:
         raise ApiError("not_found", 404)
-    return WidgetSettingsResponse(
-        company_id=row[0],
-        primary_color=row[1],
-        greeting=row[2],
-        locale=row[3],
-        position=row[4],
-        assistant_name=row[5],
-    )
+    return _settings_from_row(row)
 
 
 # Parameterized route last so it does not shadow /widget-settings

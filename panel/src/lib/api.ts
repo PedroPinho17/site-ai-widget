@@ -311,3 +311,66 @@ export function saveSchemaApprovalRequest(approved_table_ids: string[]): Promise
     body: JSON.stringify({ approved_table_ids }),
   });
 }
+
+export type WidgetSettings = {
+  company_id: string;
+  primary_color: string;
+  greeting: string;
+  locale: string;
+  position: string;
+  assistant_name: string;
+  currency: string | null;
+};
+
+export function widgetSettingsRequest(): Promise<WidgetSettings> {
+  return api("/company/widget-settings");
+}
+
+export function updateWidgetSettingsRequest(body: { currency: string | null }): Promise<WidgetSettings> {
+  return api("/company/widget-settings", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export type AssistantCitation = {
+  document_id: string;
+  document_name: string;
+  page: number;
+};
+
+export type AssistantTestResponse = {
+  mode: "sql" | "docs" | "none" | "chat";
+  answer?: string | null;
+  message?: string | null;
+  sources?: AssistantCitation[] | null;
+  tables?: string[] | null;
+  elapsed_ms?: number | null;
+};
+
+export function testAssistantRequest(question: string, lang: "pt" | "en"): Promise<AssistantTestResponse> {
+  return api("/assistant/test", {
+    method: "POST",
+    body: JSON.stringify({ question, lang }),
+  });
+}
+
+export function sourceChips(data: AssistantTestResponse): string[] {
+  if (data.mode === "chat") {
+    return [];
+  }
+  const chips: string[] = [];
+  for (const source of data.sources ?? []) {
+    const name = source.document_name?.trim();
+    if (!name) {
+      continue;
+    }
+    chips.push(source.page ? `Documento: ${name} p. ${source.page}` : `Documento: ${name}`);
+  }
+  for (const table of data.tables ?? []) {
+    if (table.trim()) {
+      chips.push(`Base de dados: ${table.trim()}`);
+    }
+  }
+  return chips;
+}

@@ -770,3 +770,25 @@ def test_denied_request_is_refused_before_the_body_is_parsed(client, monkeypatch
     assert unknown.json()["detail"]["code"] == "widget_key_invalid"
     _assert_no_cors(unknown)
     assert calls == []
+
+
+def test_widget_response_never_includes_table_names(client, monkeypatch):
+    """Table names are schema text: the panel may show them, a visitor never does."""
+    monkeypatch.setattr(
+        "site_ai_widget.sqlqa.pipeline.answer_with_sql",
+        lambda *a, **k: SqlAnswer(
+            status="ok",
+            columns=["name"],
+            rows=[["Azeite"]],
+            row_count=1,
+            truncated=False,
+            attempts=1,
+            tables=["secret_catalog_table"],
+        ),
+    )
+    token, _company = _register(client)
+    key = _make_key(client, token)["public_key"]
+    response = _ask(client, key, question="tem azeite?")
+    assert response.status_code == 200
+    assert "secret_catalog_table" not in response.text
+    assert response.json().get("tables") is None

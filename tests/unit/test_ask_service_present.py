@@ -7,6 +7,34 @@ from site_ai_widget.ask_service import answer_question
 from site_ai_widget.sqlqa.pipeline import SqlAnswer
 
 
+def test_greeting_skips_sql_and_docs_and_has_no_sources():
+    called: list[str] = []
+
+    out = answer_question(
+        uuid4(),
+        "Olá",
+        lang="pt",
+        sql_fn=lambda *a, **k: called.append("sql"),
+        docs_fn=lambda **k: called.append("docs"),
+    )
+    assert out.mode == "chat"
+    assert out.answer == "Olá! Em que posso ajudar?"
+    assert out.sources is None
+    assert called == []
+
+    thanks = answer_question(
+        uuid4(),
+        "thanks",
+        lang="en",
+        sql_fn=lambda *a, **k: called.append("sql"),
+        docs_fn=lambda **k: called.append("docs"),
+    )
+    assert thanks.mode == "chat"
+    assert thanks.answer is not None
+    assert "welcome" in thanks.answer.lower()
+    assert called == []
+
+
 def test_sql_answer_uses_present_fn_lang_and_no_sql():
     company = uuid4()
     seen: list[tuple] = []
@@ -21,7 +49,7 @@ def test_sql_answer_uses_present_fn_lang_and_no_sql():
             attempts=1,
         )
 
-    def present(columns, rows, lang, *, truncated=False, question=None):
+    def present(columns, rows, lang, *, truncated=False, question=None, currency=None):
         seen.append((columns, rows, lang, truncated, question))
         return "O azeite custa 8,9."
 
@@ -63,7 +91,7 @@ def test_empty_sql_rows_get_not_found_answer():
 
 
 def test_truncated_flag_reaches_the_answer_and_presenter_failure_falls_back():
-    def boom(columns, rows, lang, *, truncated=False, question=None):
+    def boom(columns, rows, lang, *, truncated=False, question=None, currency=None):
         raise RuntimeError("presenter bug")
 
     out = answer_question(

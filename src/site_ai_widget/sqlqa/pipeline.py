@@ -34,6 +34,7 @@ class SqlAnswer:
     truncated: bool = False
     reason: str | None = None
     attempts: int = 1
+    tables: list[str] = field(default_factory=list)
 
 
 def answer_with_sql(
@@ -125,6 +126,7 @@ def answer_with_sql(
                 row_count=result.row_count,
                 truncated=result.truncated,
                 attempts=attempts,
+                tables=_table_names(validated),
             ),
         )
 
@@ -133,6 +135,20 @@ def answer_with_sql(
         company_id,
         SqlAnswer(status="error", reason=last_reason or "db_error", attempts=attempts),
     )
+
+
+def _table_names(sql: str) -> list[str]:
+    """Table names only. Never the SQL text."""
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except sqlglot.errors.SqlglotError:
+        return []
+    names: list[str] = []
+    for table in tree.find_all(exp.Table):
+        name = table.name
+        if name and name not in names:
+            names.append(name)
+    return names[:4]
 
 
 def _string_literal(node: exp.Expression) -> str | None:

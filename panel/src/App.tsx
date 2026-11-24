@@ -11,6 +11,8 @@ import { DatabasePage } from "@/pages/DatabasePage";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { KeysPage } from "@/pages/KeysPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { TestAssistantPage } from "@/pages/TestAssistantPage";
+import { WidgetPage } from "@/pages/WidgetPage";
 
 const queryClient = createQueryClient();
 
@@ -24,7 +26,8 @@ export function AppRoutes() {
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/conversations" element={<ComingSoonPage title="Conversations" />} />
-          <Route path="/widget" element={<ComingSoonPage title="Widget" />} />
+          <Route path="/widget" element={<WidgetPage />} />
+          <Route path="/test" element={<TestAssistantPage />} />
           <Route path="/keys" element={<KeysPage />} />
         </Route>
       </Route>

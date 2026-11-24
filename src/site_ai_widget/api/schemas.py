@@ -71,6 +71,9 @@ class CompanyUpdate(BaseModel):
     default_locale: str | None = Field(default=None, max_length=10)
 
 
+CURRENCIES = ("EUR", "USD", "GBP", "BRL")
+
+
 class WidgetSettingsResponse(BaseModel):
     company_id: UUID
     primary_color: str
@@ -78,6 +81,7 @@ class WidgetSettingsResponse(BaseModel):
     locale: str
     position: str
     assistant_name: str
+    currency: str | None = None
 
 
 class WidgetSettingsUpdate(BaseModel):
@@ -86,6 +90,7 @@ class WidgetSettingsUpdate(BaseModel):
     locale: str | None = Field(default=None, max_length=10)
     position: str | None = None
     assistant_name: str | None = Field(default=None, max_length=80)
+    currency: str | None = None
 
     @field_validator("primary_color")
     @classmethod
@@ -104,6 +109,16 @@ class WidgetSettingsUpdate(BaseModel):
         if value not in POSITIONS:
             raise ValueError(f"position must be one of {POSITIONS}")
         return value
+
+    @field_validator("currency")
+    @classmethod
+    def currency_ok(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        code = value.strip().upper()
+        if code not in CURRENCIES:
+            raise ValueError(f"currency must be one of {CURRENCIES}")
+        return code
 
 
 def _valid_dns_name(host: str) -> bool:

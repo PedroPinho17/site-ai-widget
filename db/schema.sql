@@ -66,7 +66,7 @@ CREATE TABLE visitor_messages (
     company_id  uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     role        text NOT NULL CHECK (role IN ('user', 'assistant')),
     text        text,
-    mode        text CHECK (mode IS NULL OR mode IN ('sql', 'docs', 'none')),
+    mode        text CHECK (mode IS NULL OR mode IN ('sql', 'docs', 'none', 'chat')),
     row_count   integer CHECK (row_count IS NULL OR row_count >= 0),
     created_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
     FOREIGN KEY (session_id, company_id)
@@ -82,7 +82,9 @@ CREATE TABLE widget_settings (
     locale         text NOT NULL DEFAULT 'pt',
     position       text NOT NULL DEFAULT 'bottom-right'
                    CHECK (position IN ('bottom-right', 'bottom-left')),
-    assistant_name text NOT NULL DEFAULT 'Assistente'
+    assistant_name text NOT NULL DEFAULT 'Assistente',
+    currency       text
+                   CHECK (currency IS NULL OR currency IN ('EUR', 'USD', 'GBP', 'BRL'))
 );
 
 -- Phase 2: documents + hybrid RAG chunks

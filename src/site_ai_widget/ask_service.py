@@ -8,12 +8,14 @@ optional low-temperature LLM rephrase that receives only the capped rows).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError
+from site_ai_widget.greetings import small_talk_reply
 from site_ai_widget.sqlqa.present import format_sql_answer_deterministic, present_sql_answer
 
 log = logging.getLogger("site_ai_widget")
@@ -30,13 +32,15 @@ class AskCitation(BaseModel):
 
 
 class AskResponse(BaseModel):
-    mode: Literal["sql", "docs", "none"]
+    mode: Literal["sql", "docs", "none", "chat"]
     columns: list[str] | None = None
     rows: list[list[Any]] | None = None
     row_count: int | None = None
     truncated: bool | None = None
     answer: str | None = None
     sources: list[AskCitation] | None = None
+    tables: list[str] | None = None
+    elapsed_ms: int | None = None
     message: str | None = None
 
 
@@ -57,11 +61,17 @@ def answer_question(
     """
     settings = get_settings()
     max_chars = min(settings.max_question_chars, _HARD_QUESTION_CHARS)
+    started = time.perf_counter()
     question = (question or "").strip()
     if not question:
         raise ApiError("validation_error", 422)
     if len(question) > max_chars:
         raise ApiError("question_too_long", 422, n=max_chars)
+
+    reply = small_talk_reply(question, lang)
+    if reply is not None:
+        log.info("ask/sql stage=greeting")
+        return AskResponse(mode="chat", answer=reply, elapsed_ms=_elapsed(started))
 
     if sql_fn is None or docs_fn is None:
         # Looked up on the owning modules at call time (patchable in tests). The
@@ -99,6 +109,7 @@ def answer_question(
         rows = sql_answer.rows[:_MAX_SQL_ROWS]
         columns = list(sql_answer.columns)
         truncated = bool(sql_answer.truncated or sql_answer.row_count > _MAX_SQL_ROWS)
+        currency = _company_currency(company_id) if present_fn is present_sql_answer else None
         try:
             answer = present_fn(
                 columns,
@@ -106,10 +117,13 @@ def answer_question(
                 lang,
                 truncated=truncated,
                 question=question,
+                currency=currency,
             )
         except Exception as exc:
             log.info("ask/sql stage=fallback reason=present_error error=%s", type(exc).__name__)
-            answer = format_sql_answer_deterministic(columns, rows, lang, truncated=truncated)
+            answer = format_sql_answer_deterministic(
+                columns, rows, lang, truncated=truncated, currency=currency
+            )
         return AskResponse(
             mode="sql",
             columns=columns,
@@ -117,23 +131,47 @@ def answer_question(
             row_count=min(sql_answer.row_count, len(rows)),
             truncated=truncated,
             answer=answer,
+            tables=list(getattr(sql_answer, "tables", []) or []),
+            elapsed_ms=_elapsed(started),
         )
 
     try:
         docs = docs_fn(company_id=company_id, question=question)
     except ApiError as exc:
         log.warning("ask/docs failed: %s", exc.code)
-        return AskResponse(mode="none", message=_NONE_MESSAGE)
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
     except Exception as exc:
         log.warning("ask/docs failed: %s", type(exc).__name__)
-        return AskResponse(mode="none", message=_NONE_MESSAGE)
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
 
     # Decide from search hits (matched), not from whether the answer cited [n].
     if not docs.get("matched"):
-        return AskResponse(mode="none", message=_NONE_MESSAGE)
+        return AskResponse(mode="none", message=_NONE_MESSAGE, elapsed_ms=_elapsed(started))
 
     return AskResponse(
         mode="docs",
         answer=docs["answer"],
         sources=[AskCitation(**c) for c in docs["citations"]],
+        elapsed_ms=_elapsed(started),
     )
+
+
+def _elapsed(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
+def _company_currency(company_id: str) -> str | None:
+    try:
+        from site_ai_widget.db.pool import connection
+
+        with connection() as conn:
+            row = conn.execute(
+                "SELECT currency FROM widget_settings WHERE company_id = %s",
+                (str(company_id),),
+            ).fetchone()
+    except Exception:
+        log.info("ask/sql stage=currency status=unavailable")
+        return None
+    if not row or not row[0]:
+        return None
+    return str(row[0])

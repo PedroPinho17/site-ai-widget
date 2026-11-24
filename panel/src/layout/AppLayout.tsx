@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Menu } from "lucide-react";
+import { Menu, MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
@@ -8,11 +8,12 @@ import { Button } from "@/components/ui/button";
 import { companyRequest } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+const NAV: { to: string; label: string; end?: boolean; icon?: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/documents", label: "Documents" },
   { to: "/database", label: "Database" },
   { to: "/conversations", label: "Conversations" },
+  { to: "/test", label: "Test assistant", icon: true },
   { to: "/widget", label: "Widget" },
   { to: "/keys", label: "Keys & Origins" },
 ];
@@ -28,11 +29,12 @@ function NavItems({ onGo }: { onGo?: () => void }) {
           onClick={onGo}
           className={({ isActive }) =>
             cn(
-              "rounded-md px-3 py-2 text-sm font-medium",
+              "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium",
               isActive ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted",
             )
           }
         >
+          {item.icon ? <MessageCircle className="h-4 w-4" aria-hidden="true" /> : null}
           {item.label}
         </NavLink>
       ))}

@@ -136,6 +136,92 @@ def test_history_text_runs_like_the_live_answer():
     ]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_source_chips_expand_and_typing_in_embed():
+    """Runs sourceChips from embed.js: localized document chips, never table names."""
+    import json
+
+    source = _js()
+    start = source.index("  function sourceChips(data) {")
+    end = source.index("\n  }\n", start) + 4
+    function = source[start:end]
+    cell_start = source.index("  function cellText(value) {")
+    cell_end = source.index("\n  }\n", cell_start) + 4
+    cell = source[cell_start:cell_end]
+    cases = [
+        {"mode": "docs", "sources": [{"document_name": "Manual.pdf", "page": 2}], "tables": []},
+        {"mode": "sql", "sources": [], "tables": ["products"]},
+        {"mode": "chat", "answer": "Olá!", "sources": [], "tables": []},
+    ]
+    results = {}
+    for lang, labels in {
+        "pt": '{sourceDoc: "Documento", sourcePage: "p."}',
+        "en": '{sourceDoc: "Document", sourcePage: "p."}',
+    }.items():
+        script = (
+            f"var copy = {labels};\n"
+            + cell
+            + "\n"
+            + function
+            + "\nprocess.stdout.write(JSON.stringify("
+            + json.dumps(cases)
+            + ".map(sourceChips)));"
+        )
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        results[lang] = json.loads(result.stdout)
+    assert results["pt"] == [["Documento: Manual.pdf p. 2"], [], []]
+    assert results["en"] == [["Document: Manual.pdf p. 2"], [], []]
+    assert "Base de dados" not in source
+    assert "data.tables" not in source
+    assert "is-full" in source
+    assert "copy.expand" in source
+    assert "copy.typing" in source
+    assert "_trapFocus" in source
+    assert 'attachShadow({ mode: "closed" })' in source
+
+
+def test_widget_suggestions_are_generic_for_any_company():
+    """The same script serves every company: no product-specific suggestions."""
+    source = _js()
+    start = source.index("suggestions: [")
+    pt = source[start : source.index("]", start)]
+    start_en = source.index("suggestions: [", start + 1)
+    en = source[start_en : source.index("]", start_en)]
+    for text in (pt, en):
+        assert "azeite" not in text.lower()
+        assert "olive" not in text.lower()
+        assert "stock" not in text.lower()
+
+
+def test_styles_are_csp_safe_with_a_style_fallback():
+    source = _js()
+    assert "new CSSStyleSheet()" in source
+    assert "adoptedStyleSheets = [sheet]" in source
+    # The <style> element is only the fallback inside applyStyles.
+    start = source.index("  function applyStyles(root) {")
+    end = source.index("\n  }\n", start)
+    assert source.count('createElement("style")') == 1
+    assert start < source.index('createElement("style")') < end
+    assert "innerHTML" not in source
+    assert "setAttribute(\"style\"" not in source
+
+
+def test_focus_trap_only_cycles_inside_the_panel():
+    source = _js()
+    start = source.index("    _trapFocus(event) {")
+    end = source.index("\n    }\n", start)
+    body = source[start:end]
+    assert 'this._panel.querySelectorAll("button, input, textarea")' in body
+    assert "this._root.querySelectorAll" not in body
+
+
 def test_format_answer_prefers_server_answer_for_sql():
     text = _js()
     assert 'typeof data.answer === "string" && data.answer' in text

@@ -19,7 +19,12 @@
       send: "Enviar",
       close: "Fechar",
       open: "Abrir conversa",
+      expand: "Ecrã inteiro",
+      collapse: "Voltar ao painel",
       typing: "A escrever…",
+      suggestions: ["O que vendem?", "Qual o horário?", "Como posso contactar-vos?"],
+      sourceDoc: "Documento",
+      sourcePage: "p.",
       errorKey: "A chave do widget não é válida.",
       errorOrigin: "Este site não está autorizado a usar o chat.",
       errorRate: "Demasiados pedidos. Tente de novo em breve.",
@@ -36,7 +41,12 @@
       send: "Send",
       close: "Close",
       open: "Open chat",
+      expand: "Full screen",
+      collapse: "Back to the panel",
       typing: "Typing…",
+      suggestions: ["What do you sell?", "What are your hours?", "How can I contact you?"],
+      sourceDoc: "Document",
+      sourcePage: "p.",
       errorKey: "The widget key is not valid.",
       errorOrigin: "This site is not allowed to use the chat.",
       errorRate: "Too many requests, try again soon.",
@@ -144,7 +154,17 @@
     }
     /* mode "none": the server's fallback text is English only, so the caller
        shows the localized copy.emptyAnswer instead. */
-    var sources = (data && data.sources) || [];
+    return lines.join("\n");
+  }
+
+  /* Chips under the bubble: document sources only (table names are schema
+     text and never shown to visitors). Greetings get none. textContent only. */
+  function sourceChips(data) {
+    var chips = [];
+    if (!data || data.mode === "chat") {
+      return chips;
+    }
+    var sources = data.sources || [];
     for (var s = 0; s < sources.length; s++) {
       var src = sources[s] || {};
       var name = cellText(src.document_name);
@@ -152,9 +172,10 @@
         continue;
       }
       var page = cellText(src.page);
-      lines.push(page ? name + " (p. " + page + ")" : name);
+      var label = copy.sourceDoc + ": " + name;
+      chips.push(page ? label + " " + copy.sourcePage + " " + page : label);
     }
-    return lines.join("\n");
+    return chips;
   }
 
   /* Prefer the stored assistant text (same string the visitor saw). */
@@ -227,6 +248,7 @@
       }
       this._ready = true;
       this._open = false;
+      this._full = false;
       this._busy = false;
       this._blocked = false;
       this._historyStarted = false;
@@ -234,7 +256,15 @@
       this._onEscape = (event) => {
         if (event.key === "Escape" && this._open) {
           event.preventDefault();
-          this.close();
+          if (this._full) {
+            this._setFull(false);
+          } else {
+            this.close();
+          }
+          return;
+        }
+        if (event.key === "Tab" && this._full && this._open) {
+          this._trapFocus(event);
         }
       };
       document.addEventListener("keydown", this._onEscape);
@@ -250,9 +280,7 @@
       /* Closed: other scripts on the host page cannot reach this tree via
          element.shadowRoot. */
       var root = this.attachShadow({ mode: "closed" });
-      var style = document.createElement("style");
-      style.textContent = CSS;
-      root.appendChild(style);
+      applyStyles(root);
 
       var panel = document.createElement("section");
       panel.className = "panel";
@@ -262,18 +290,33 @@
 
       var header = document.createElement("header");
       header.className = "header";
+      var brand = document.createElement("div");
+      brand.className = "brand";
+      brand.appendChild(icon());
       var title = document.createElement("h2");
       title.textContent = copy.title;
       title.id = "title";
       panel.setAttribute("aria-labelledby", "title");
+      brand.appendChild(title);
+      var actions = document.createElement("div");
+      actions.className = "actions";
+      var expandBtn = document.createElement("button");
+      expandBtn.type = "button";
+      expandBtn.className = "expand";
+      expandBtn.setAttribute("aria-label", copy.expand);
+      expandBtn.setAttribute("aria-pressed", "false");
+      expandBtn.textContent = copy.expand;
+      expandBtn.addEventListener("click", () => this._setFull(!this._full));
       var closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.className = "close";
       closeBtn.setAttribute("aria-label", copy.close);
       closeBtn.textContent = "\u00d7";
       closeBtn.addEventListener("click", () => this.close());
-      header.appendChild(title);
-      header.appendChild(closeBtn);
+      actions.appendChild(expandBtn);
+      actions.appendChild(closeBtn);
+      header.appendChild(brand);
+      header.appendChild(actions);
 
       var log = document.createElement("div");
       log.className = "log";
@@ -338,6 +381,10 @@
 
       root.appendChild(panel);
       root.appendChild(bubble);
+      root.addEventListener("focusin", (event) => {
+        this._focusAt = event.target;
+      });
+      this._root = root;
 
       this._panel = panel;
       this._log = log;
@@ -346,6 +393,7 @@
       this._counter = counter;
       this._sendBtn = send;
       this._closeBtn = closeBtn;
+      this._expandBtn = expandBtn;
       this._bubble = bubble;
       this._renderCount();
       this._sync();
@@ -365,11 +413,47 @@
       this._focusComposer();
     }
 
+    _setFull(on) {
+      this._full = on;
+      this._panel.classList.toggle("is-full", on);
+      this.classList.toggle("is-full", on);
+      this._expandBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      this._expandBtn.setAttribute("aria-label", on ? copy.collapse : copy.expand);
+      this._expandBtn.textContent = on ? copy.collapse : copy.expand;
+      this._focusComposer();
+    }
+
+    _trapFocus(event) {
+      if (!this._panel) {
+        return;
+      }
+      var nodes = this._panel.querySelectorAll("button, input, textarea");
+      var items = [];
+      for (var i = 0; i < nodes.length; i++) {
+        if (!nodes[i].disabled) {
+          items.push(nodes[i]);
+        }
+      }
+      if (!items.length) {
+        return;
+      }
+      var first = items[0];
+      var last = items[items.length - 1];
+      if (event.shiftKey && this._focusAt === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && this._focusAt === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
     close() {
       if (!this._open) {
         return;
       }
       this._open = false;
+      this._setFull(false);
       this.classList.remove("is-open");
       this._panel.classList.remove("is-open");
       this._panel.setAttribute("aria-hidden", "true");
@@ -384,8 +468,10 @@
       }
       if (this._blocked || this._input.disabled) {
         this._closeBtn.focus();
+        this._focusAt = this._closeBtn;
       } else {
         this._input.focus();
+        this._focusAt = this._input;
       }
     }
 
@@ -405,13 +491,49 @@
       this._log.scrollTop = this._log.scrollHeight;
     }
 
-    _add(role, text) {
+    _add(role, text, chips) {
       var item = document.createElement("div");
       item.className = role === "user" ? "msg user" : "msg assistant";
       var paragraph = document.createElement("p");
       paragraph.textContent = text;
       item.appendChild(paragraph);
+      if (chips && chips.length) {
+        var row = document.createElement("div");
+        row.className = "chips";
+        for (var i = 0; i < chips.length; i++) {
+          var chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = chips[i];
+          row.appendChild(chip);
+        }
+        item.appendChild(row);
+      }
       this._log.appendChild(item);
+      this._scroll();
+    }
+
+    _showGreeting() {
+      this._add("assistant", copy.greeting);
+      var row = document.createElement("div");
+      row.className = "chips";
+      var suggestions = copy.suggestions || [];
+      for (var i = 0; i < suggestions.length && i < 3; i++) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "chip";
+        button.textContent = suggestions[i];
+        button.addEventListener("click", ((question) => {
+          return () => {
+            if (this._busy || this._blocked) {
+              return;
+            }
+            this._input.value = question;
+            this._send();
+          };
+        })(suggestions[i]));
+        row.appendChild(button);
+      }
+      this._log.appendChild(row);
       this._scroll();
     }
 
@@ -437,7 +559,7 @@
       }
       var token = readToken();
       if (!token) {
-        this._add("assistant", copy.greeting);
+        this._showGreeting();
         return;
       }
       this._busy = true;
@@ -473,7 +595,7 @@
             shown += 1;
           }
           if (!shown) {
-            self._add("assistant", copy.greeting);
+            self._showGreeting();
           }
         })
         .catch(function () {
@@ -535,7 +657,7 @@
             writeToken(token);
           }
           var answer = formatAnswer(result.data);
-          self._add("assistant", answer || copy.emptyAnswer);
+          self._add("assistant", answer || copy.emptyAnswer, sourceChips(result.data));
         })
         .catch(function () {
           if (self.isConnected) {
@@ -552,6 +674,24 @@
           self._focusComposer();
         });
     }
+  }
+
+  /* Constructable stylesheet first: unlike a <style> element it is allowed by a
+     strict Content-Security-Policy (style-src without 'unsafe-inline'). */
+  function applyStyles(root) {
+    try {
+      if (typeof CSSStyleSheet === "function" && "adoptedStyleSheets" in root) {
+        var sheet = new CSSStyleSheet();
+        sheet.replaceSync(CSS);
+        root.adoptedStyleSheets = [sheet];
+        return;
+      }
+    } catch (err) {
+      /* Older browsers: fall through to a <style> element. */
+    }
+    var style = document.createElement("style");
+    style.textContent = CSS;
+    root.appendChild(style);
   }
 
   function icon() {
@@ -573,15 +713,22 @@
     ".bubble { pointer-events: auto; position: fixed; right: 20px; bottom: 20px; width: 56px; height: 56px;",
     "  border: 0; border-radius: 50%; background: #0f766e; color: #fff; cursor: pointer;",
     "  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.28); display: flex; align-items: center; justify-content: center; }",
-    ".bubble:focus-visible, .close:focus-visible, .send:focus-visible, .composer input:focus-visible {",
+    ".bubble:focus-visible, .close:focus-visible, .expand:focus-visible, .chip:focus-visible, .send:focus-visible, .composer input:focus-visible {",
     "  outline: 3px solid #f59e0b; outline-offset: 2px; }",
     ".panel { pointer-events: auto; display: none; position: fixed; right: 20px; bottom: 88px; width: 360px;",
     "  max-width: calc(100vw - 32px); height: min(520px, calc(100vh - 120px)); background: #fff; color: #14221f;",
     "  border-radius: 16px; box-shadow: 0 16px 48px rgba(15, 23, 42, 0.28); flex-direction: column; overflow: hidden; }",
     ".panel.is-open { display: flex; }",
+    ".panel.is-full { inset: 0; right: 0; bottom: 0; width: 100%; max-width: none; height: 100%; border-radius: 0; z-index: 2147483001; }",
+    ":host(.is-full) .bubble { display: none; }",
     ".header { display: flex; align-items: center; justify-content: space-between; gap: 12px;",
     "  padding: 12px 14px; background: #0f766e; color: #fff; }",
+    ".brand { display: flex; align-items: center; gap: 8px; min-width: 0; }",
+    ".brand svg { width: 28px; height: 28px; flex: 0 0 auto; }",
     ".header h2 { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.3; }",
+    ".actions { display: flex; align-items: center; gap: 4px; }",
+    ".expand { border: 0; background: transparent; color: #fff; font-size: 13px; border-radius: 8px;",
+    "  padding: 6px 8px; cursor: pointer; }",
     ".close { border: 0; background: transparent; color: #fff; font-size: 24px; line-height: 1; width: 36px; height: 36px;",
     "  border-radius: 8px; cursor: pointer; }",
     ".log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; background: #f8faf9; }",
@@ -589,6 +736,10 @@
     ".msg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.4; }",
     ".msg.user { align-self: flex-end; background: #ccfbf1; color: #134e4a; }",
     ".msg.assistant { align-self: flex-start; background: #fff; color: #14221f; border: 1px solid #d9e4e0; }",
+    ".chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }",
+    ".chip { border: 1px solid #99f6e4; background: #f0fdfa; color: #115e59; border-radius: 999px;",
+    "  padding: 4px 8px; font-size: 12px; line-height: 1.3; cursor: pointer; }",
+    "span.chip { cursor: default; }",
     ".typing { display: none; margin: 0; padding: 0 14px 8px; color: #3f6212; font-size: 13px; background: #f8faf9; }",
     ".typing.is-on { display: block; }",
     ".composer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-top: 1px solid #e2e8e4; background: #fff; }",

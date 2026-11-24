@@ -39,7 +39,7 @@ class WidgetHistoryRequest(BaseModel):
 class WidgetHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     text: str | None = None
-    mode: Literal["sql", "docs", "none"] | None = None
+    mode: Literal["sql", "docs", "none", "chat"] | None = None
     row_count: int | None = None
     created_at: datetime
 
@@ -72,7 +72,10 @@ def widget_ask(key: str, body: WidgetAskRequest, request: Request) -> WidgetAskR
     token, session_id = resolve_session(record.company_id, body.session_token)
     append_turn(session_id, record.company_id, (body.question or "").strip(), result)
     log.info("widget ask mode=%s key_prefix=%s", result.mode, _key_prefix(key))
-    return WidgetAskResponse(**result.model_dump(), session_token=token)
+    # Table names are schema text: the panel test page may show them, an anonymous
+    # visitor never sees them.
+    public = result.model_dump(exclude={"tables"})
+    return WidgetAskResponse(**public, session_token=token)
 
 
 @router.post("/{key}/history", response_model=WidgetHistoryResponse)
