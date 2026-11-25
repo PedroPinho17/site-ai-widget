@@ -103,12 +103,15 @@ The Groq **free tier** and the local e5 model are enough to run the demo; no pai
 - **SQL runtime** — `SET TRANSACTION READ ONLY`, `statement_timeout` 5 s, lock timeout, named cursor, result cap of **500** rows / 1 MiB.
 - **SQL validator** — sqlglot: a single read query, approved tables/columns only, comments stripped, hard `LIMIT` (default 100, max 500). Writes, DDL and unknown functions are refused.
 - **Schema approval** — a column is usable only if **table and column** are approved. Sensitive names (e.g. password, NIF, email) cannot be approved.
-- **Encrypted connections** — client DSNs are stored with Fernet (`CONNECTIONS_KEY`); the password is never returned by the API.
+- **Encrypted connections** — client DSNs are stored with Fernet (`CONNECTIONS_KEY`); the password is never returned by the API. A database outside `CLIENTDB_ALLOWED_HOSTS` is always reached with at least `sslmode=require`, so its password never travels in clear text.
 - **Origins** — widget CORS only on `/v1/widget/*`; each key has an exact `scheme://host[:port]` allowlist.
-- **Rate limits** — per IP for login, questions (each `/ask` weighs **3**), widget keys, widget lookups and the test assistant.
+- **Rate limits** — per IP for login, questions (each `/ask` weighs **3**), widget keys, widget lookups and the test assistant. Login is also limited per account (keyed by a hash of the email), so guessing a password from many IPs still hits a wall.
+- **Closed sign-up** — `POST /auth/register` answers 404 unless `ALLOW_REGISTRATION=1`; the demo companies come from the seed.
 - **Widget** — closed Shadow DOM, no `innerHTML` of model text, constructable stylesheets.
 - **PDF links** — visitor links are HMAC-signed (`/v1/signed-documents/{id}`), 300 s by default (max 900 s), and only when the company turns `allow_visitor_documents` on.
 - **Sessions** — the raw visitor token is returned once; only its SHA-256 is stored. Visitor sessions are deleted after the company's retention window (default 30 days, 1–365).
+- **Response headers** — every API response has `nosniff`, `Referrer-Policy: no-referrer` (a signed PDF URL never leaks through `Referer`) and `frame-ancestors 'none'`; JSON also gets `default-src 'none'` and `Cache-Control: no-store`. The server version is not advertised.
+- **Uploads** — PDF magic bytes, size and page limits, encrypted PDFs refused, and a cap on the text extracted from one file, so a crafted PDF cannot tie up the embedding CPU.
 
 ## Evaluation
 
@@ -197,6 +200,7 @@ Set in `.env` (see [`.env.example`](.env.example)). Never commit real values.
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` | Optional: any OpenAI-compatible endpoint |
 | `PANEL_ORIGINS` | Admin panel origins allowed by CORS (never `*`) |
 | `RUN_SEED` | `1` seeds the demo companies and PDFs on start |
+| `ALLOW_REGISTRATION` | `1` opens self-service sign-up (`POST /auth/register`); default `0` |
 | `TRUSTED_PROXY_IPS` | Optional proxy IPs/CIDRs allowed to set the client IP (default: loopback only) |
 | `AUTH_RATE_LIMIT`, `API_RATE_LIMIT`, `ASK_RATE_LIMIT` (+ `_WINDOW`) | Optional rate limits |
 | `MAX_UPLOAD_MB`, `MAX_PDF_PAGES`, `MAX_DOCUMENTS`, `MAX_QUESTION_CHARS` | Optional document and question limits |

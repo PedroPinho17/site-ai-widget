@@ -14,7 +14,13 @@ from site_ai_widget.api.auth import (
     public_user,
     validate_password,
 )
-from site_ai_widget.api.deps import require_api_rate, require_auth_rate
+from site_ai_widget.api.config import get_settings
+from site_ai_widget.api.deps import (
+    record_failed_login,
+    require_account_auth_rate,
+    require_api_rate,
+    require_auth_rate,
+)
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.api.schemas import (
     ChangePasswordRequest,
@@ -34,6 +40,9 @@ def register(
     body: RegisterRequest,
     _ip: str = Depends(require_auth_rate),
 ) -> TokenResponse:
+    if not get_settings().allow_registration:
+        # Same answer as an unknown route: a closed sign-up is not advertised.
+        raise ApiError("not_found", 404)
     validate_password(body.password)
     email = str(body.email).strip().lower()
     pw_hash = hash_password(body.password)
@@ -86,8 +95,12 @@ def login(
     body: LoginRequest,
     _ip: str = Depends(require_auth_rate),
 ) -> TokenResponse:
+    # Also per account: password guessing spread over many IPs still hits a wall.
+    # Only failures count, so the real owner signing in never spends the budget.
+    require_account_auth_rate(str(body.email))
     user = authenticate(str(body.email), body.password)
     if not user:
+        record_failed_login(str(body.email))
         raise ApiError("bad_login", 401)
     return TokenResponse(access_token=create_token(user), user=public_user(user))
 
@@ -105,7 +118,7 @@ def me(
 def change_password(
     body: ChangePasswordRequest,
     user: dict = Depends(current_user),
-    _ip: str = Depends(require_api_rate),
+    _ip: str = Depends(require_auth_rate),
 ) -> TokenResponse:
     """Change the password and bump ``token_version``.
 

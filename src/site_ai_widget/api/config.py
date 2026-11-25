@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Empty string → loopback only (127.0.0.1, ::1).
     trusted_proxy_ips: str = ""
 
+    # Self-service sign-up (POST /auth/register creates a company + admin). Off by
+    # default: on a public deployment anyone could create tenants, upload PDFs and
+    # spend the LLM quota. The demo companies are created by the seed instead.
+    allow_registration: bool = False
+
     auth_rate_limit: int = Field(default=10, ge=1)
     auth_rate_limit_window: int = Field(default=300, ge=1)
     api_rate_limit: int = Field(default=120, ge=1)

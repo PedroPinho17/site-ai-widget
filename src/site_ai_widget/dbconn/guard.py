@@ -17,7 +17,12 @@ from collections.abc import Iterator
 import psycopg
 
 from site_ai_widget.api.errors import ApiError
-from site_ai_widget.dbconn.target import ConnectionParams, build_conninfo, resolve_target
+from site_ai_widget.dbconn.target import (
+    ConnectionParams,
+    build_conninfo,
+    enforce_tls,
+    resolve_target,
+)
 
 log = logging.getLogger("site_ai_widget")
 
@@ -95,6 +100,7 @@ def client_session(
     because they can contain parts of the connection string.
     """
     hostaddr = resolve_target(params.host, params.port)
+    params = enforce_tls(params)
     # Company slot first: a second session of the same company never waits for a global slot.
     with _company_slot(company_id), _global_slot():
         yield from _session(params, hostaddr)

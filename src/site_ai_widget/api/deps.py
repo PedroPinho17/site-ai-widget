@@ -1,6 +1,8 @@
 """Shared FastAPI dependencies: rate limits and authenticated user."""
 from __future__ import annotations
 
+import contextlib
+import hashlib
 from threading import Lock
 
 from fastapi import Depends, Request
@@ -88,6 +90,32 @@ def require_auth_rate(request: Request) -> str:
     ip = resolve_client_ip(request)
     limiter.check(f"auth:{ip}")
     return ip
+
+
+def _account_key(email: str) -> str:
+    # A hash of the normalised email: the limiter never holds addresses in memory.
+    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:32]
+    return f"auth-account:{digest}"
+
+
+def require_account_auth_rate(email: str) -> None:
+    """Refuse a login (429) when this account had too many recent failures.
+
+    Per account, on top of the per-IP limit, with the same budget. Only failed
+    attempts fill it (:func:`record_failed_login`), so signing in correctly never
+    spends it. Unknown and known emails behave the same: no account oracle.
+    """
+    limiter, _, _ = _ensure_limiters()
+    key = _account_key(email)
+    if not limiter.fits(key):
+        limiter.check(key)  # raises 429 with Retry-After
+
+
+def record_failed_login(email: str) -> None:
+    """Count one failed login against the account's bucket."""
+    limiter, _, _ = _ensure_limiters()
+    with contextlib.suppress(ApiError):
+        limiter.check(_account_key(email))
 
 
 def require_api_rate(request: Request) -> str:

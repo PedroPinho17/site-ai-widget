@@ -23,6 +23,8 @@ os.environ.setdefault(
     "DATABASE_URL",
     "postgresql://sitewidget:test@127.0.0.1:5435/sitewidget",
 )
+# Many tests create their own company through POST /auth/register (off by default).
+os.environ.setdefault("ALLOW_REGISTRATION", "1")
 os.environ.setdefault("AUTH_RATE_LIMIT", "1000")
 os.environ.setdefault("AUTH_RATE_LIMIT_WINDOW", "60")
 os.environ.setdefault("API_RATE_LIMIT", "1000")

@@ -29,6 +29,7 @@ from site_ai_widget.api.routes import (
     widget,
     widget_keys,
 )
+from site_ai_widget.api.security_headers import SecurityHeadersMiddleware
 from site_ai_widget.api.widget_cors import WidgetCorsMiddleware
 from site_ai_widget.db import pool as db_pool
 from site_ai_widget.docs.storage import upload_root
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
     # Outermost so widget preflight is answered here. Scoped to /v1/widget/*
     # — not a global wildcard CORS middleware.
     app.add_middleware(WidgetCorsMiddleware)
+    # Added last = outermost: every answer, including those written by the CORS
+    # middlewares (preflight, refused origin, rate limit), gets the headers.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_request: Request, exc: RequestValidationError):

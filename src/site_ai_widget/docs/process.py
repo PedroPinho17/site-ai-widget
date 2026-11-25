@@ -19,14 +19,29 @@ NO_TEXT_ERROR = "no extractable text (scanned PDFs / OCR not supported)"
 BATCH = 32
 
 
-def extract_pages(path: Path) -> list[str]:
+# Text kept from one PDF. A 300-page manual is far below this; a crafted file
+# whose streams expand into millions of characters would otherwise become
+# thousands of chunks and hold the embedding CPU for a long time.
+MAX_EXTRACTED_CHARS = 3_000_000
+TOO_MUCH_TEXT_ERROR = "too much text in this PDF (split it into smaller files)"
+
+
+class TooMuchText(Exception):
+    """The PDF holds more text than MAX_EXTRACTED_CHARS."""
+
+
+def extract_pages(path: Path, *, max_chars: int = MAX_EXTRACTED_CHARS) -> list[str]:
     reader = PdfReader(str(path))
     pages: list[str] = []
+    total = 0
     for page in reader.pages:
         try:
             text = page.extract_text() or ""
         except Exception:
             text = ""
+        total += len(text)
+        if total > max_chars:
+            raise TooMuchText
         pages.append(text)
     return pages
 
@@ -81,6 +96,10 @@ def process_document(document_id: UUID | str, company_id: UUID | str) -> None:
             pages = extract_pages(path)
         except PdfReadError:
             _set_status(doc_id, co_id, "failed", error="could not read PDF")
+            return
+        except TooMuchText:
+            log.warning("document text limit reached id=%s", doc_id)
+            _set_status(doc_id, co_id, "failed", error=TOO_MUCH_TEXT_ERROR)
             return
         page_count = len(pages)
         chunks = chunk_pages(pages)

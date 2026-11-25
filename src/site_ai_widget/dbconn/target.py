@@ -1,6 +1,7 @@
 """Where a client database connection may point (SSRF guard) and how we build it."""
 from __future__ import annotations
 
+import dataclasses
 import ipaddress
 import re
 import socket
@@ -55,6 +56,26 @@ def resolve_target(host: str, port: int) -> str:
         raise ApiError("db_host_not_allowed", 422)
     # Prefer IPv4 when the name has both.
     return str(min(ips, key=lambda ip: ip.version))
+
+
+# Modes that may send the login in clear text (``prefer`` and ``allow`` fall back
+# silently when the server offers no TLS).
+_WEAK_SSL_MODES = frozenset({"disable", "allow", "prefer"})
+
+
+def enforce_tls(params: ConnectionParams) -> ConnectionParams:
+    """At least ``sslmode=require`` for any server outside CLIENTDB_ALLOWED_HOSTS.
+
+    A public database must not receive the client's password over plain TCP.
+    Only the operator's own private hosts (the demo ``clientdb``, a database on
+    the same private network) may keep a weaker mode.
+    """
+    if params.sslmode not in _WEAK_SSL_MODES and params.sslmode in SSL_MODES:
+        return params
+    host = params.host.strip().lower()
+    if (host, params.port) in get_settings().clientdb_allowlist():
+        return params
+    return dataclasses.replace(params, sslmode="require")
 
 
 def build_conninfo(params: ConnectionParams, hostaddr: str | None = None) -> str:

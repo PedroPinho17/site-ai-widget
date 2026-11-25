@@ -15,4 +15,5 @@ if [ "${RUN_SEED:-0}" = "1" ]; then
 fi
 
 # Listen on all interfaces inside the container; compose publishes only 127.0.0.1 on the host.
-exec uvicorn site_ai_widget.api.main:app --host 0.0.0.0 --port 8002
+# --no-server-header: responses do not advertise the server software.
+exec uvicorn site_ai_widget.api.main:app --host 0.0.0.0 --port 8002 --no-server-header

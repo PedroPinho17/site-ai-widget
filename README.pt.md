@@ -105,12 +105,15 @@ O **plano gratuito** da Groq e o modelo e5 local chegam para correr a demonstra�
 - **Execução do SQL** — `SET TRANSACTION READ ONLY`, `statement_timeout` de 5 s, tempo limite de bloqueio, cursor com nome, máximo de **500** linhas / 1 MiB.
 - **Validador de SQL** — sqlglot: uma única consulta de leitura, só tabelas/colunas aprovadas, comentários removidos, `LIMIT` obrigatório (100 por omissão, máximo 500). Escritas, DDL e funções desconhecidas são recusadas.
 - **Aprovação do esquema** — uma coluna só pode ser usada se a **tabela e a coluna** estiverem aprovadas. Nomes sensíveis (p. ex. password, NIF, email) não podem ser aprovados.
-- **Ligações cifradas** — os DSN dos clientes são guardados com Fernet (`CONNECTIONS_KEY`); a palavra-passe nunca é devolvida pela API.
+- **Ligações cifradas** — os DSN dos clientes são guardados com Fernet (`CONNECTIONS_KEY`); a palavra-passe nunca é devolvida pela API. Uma base de dados fora de `CLIENTDB_ALLOWED_HOSTS` é sempre contactada com pelo menos `sslmode=require`, para a palavra-passe nunca circular em texto simples.
 - **Origens** — CORS do widget só em `/v1/widget/*`; cada chave tem uma lista exata de `scheme://host[:port]` permitidos.
-- **Limites de pedidos** — por IP no login, nas perguntas (cada `/ask` conta **3**), nas chaves do widget, nas consultas do widget e em testar assistente.
+- **Limites de pedidos** — por IP no login, nas perguntas (cada `/ask` conta **3**), nas chaves do widget, nas consultas do widget e em testar assistente. O login também tem limite por conta (com um hash do email), por isso tentar adivinhar uma palavra-passe a partir de muitos IP continua a ser travado.
+- **Registo fechado** — `POST /auth/register` responde 404 a menos que `ALLOW_REGISTRATION=1`; as empresas de demonstração vêm do seed.
 - **Widget** — Shadow DOM fechado, sem `innerHTML` com texto do modelo, folhas de estilo construídas.
 - **Ligações para PDF** — as ligações para visitantes são assinadas com HMAC (`/v1/signed-documents/{id}`), 300 s por omissão (máximo 900 s), e só quando a empresa ativa `allow_visitor_documents`.
 - **Sessões** — o token do visitante é devolvido uma vez; só se guarda o SHA-256. As sessões dos visitantes são apagadas no fim do período de retenção da empresa (30 dias por omissão, 1–365).
+- **Cabeçalhos de resposta** — todas as respostas da API têm `nosniff`, `Referrer-Policy: no-referrer` (um URL assinado de PDF nunca sai pelo `Referer`) e `frame-ancestors 'none'`; o JSON tem ainda `default-src 'none'` e `Cache-Control: no-store`. A versão do servidor não é anunciada.
+- **Carregamentos** — assinatura `%PDF-`, limites de tamanho e de páginas, PDF cifrados recusados e um limite ao texto extraído de cada ficheiro, para um PDF malicioso não prender o CPU dos embeddings.
 
 ## Avaliação
 
@@ -199,6 +202,7 @@ Definida no `.env` (ver [`.env.example`](.env.example)). Nunca faça commit de v
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` | Opcional: qualquer endpoint compatível com OpenAI |
 | `PANEL_ORIGINS` | Origens do painel permitidas pelo CORS (nunca `*`) |
 | `RUN_SEED` | `1` cria as empresas e os PDF de demonstração no arranque |
+| `ALLOW_REGISTRATION` | `1` abre o registo livre (`POST /auth/register`); por omissão `0` |
 | `TRUSTED_PROXY_IPS` | IP/CIDR opcionais de proxies que podem indicar o IP do cliente (por omissão: só loopback) |
 | `AUTH_RATE_LIMIT`, `API_RATE_LIMIT`, `ASK_RATE_LIMIT` (+ `_WINDOW`) | Limites de pedidos opcionais |
 | `MAX_UPLOAD_MB`, `MAX_PDF_PAGES`, `MAX_DOCUMENTS`, `MAX_QUESTION_CHARS` | Limites opcionais de documentos e perguntas |
