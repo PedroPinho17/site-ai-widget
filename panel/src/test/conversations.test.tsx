@@ -32,7 +32,16 @@ describe("conversations page", () => {
         return jsonResponse(200, {
           id: "sess-1",
           lang: "pt",
-          messages: [{ role: "user", text: "Qual o horário?", mode: null, unanswered: false, elapsed_ms: null }],
+          messages: [
+            { role: "user", text: "Qual o horário? [1]", mode: null, unanswered: false, elapsed_ms: null },
+            {
+              role: "assistant",
+              text: "Devoluções até 14 dias com talão【1】. Ver também [2].",
+              mode: "docs",
+              unanswered: false,
+              elapsed_ms: 900,
+            },
+          ],
         });
       }
       if (url.includes("/conversations")) {
@@ -59,8 +68,12 @@ describe("conversations page", () => {
     expect(screen.queryByText("2026-11-24T10:01:00Z")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open" }));
     await waitFor(() => {
-      expect(screen.getByText("Qual o horário?")).toBeInTheDocument();
+      expect(screen.getByText("Qual o horário? [1]")).toBeInTheDocument();
     });
+    // Citation marks are stripped from stored answers (sources live in chips),
+    // while the visitor's own text is shown exactly as typed.
+    expect(screen.getByText("Devoluções até 14 dias com talão. Ver também.")).toBeInTheDocument();
+    expect(screen.queryByText(/【1】/)).not.toBeInTheDocument();
     expect(screen.getByText(/^Visitor/)).toBeInTheDocument();
     const listCall = fetchMock.mock.calls.find(([input]) => String(input).includes("/conversations"));
     expect(String(listCall?.[0])).not.toContain("unanswered=");

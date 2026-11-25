@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { useI18n } from "@/i18n/useI18n";
 import { ApiRequestError, getConversationRequest, listConversationsRequest } from "@/lib/api";
+import { SafeMarkdown } from "@/lib/safe-markdown";
 
 const SOURCE_KEYS: Record<string, MessageKey> = {
   sql: "source.sql",
@@ -88,7 +89,15 @@ export function ConversationsPage() {
               {message.unanswered ? ` · ${t("conversations.unanswered")}` : ""}
               {` · ${formatWhen(message.created_at, locale)}`}
             </p>
-            <p className="mt-1 whitespace-pre-wrap text-sm">{message.text}</p>
+            {/* Same rendering as Test assistant: stored answers keep citation marks
+                (【1】, [1]) that SafeMarkdown strips; visitor text stays verbatim. */}
+            {message.role === "assistant" ? (
+              <div className="mt-1">
+                <SafeMarkdown text={message.text ?? ""} />
+              </div>
+            ) : (
+              <p className="mt-1 whitespace-pre-wrap text-sm">{message.text}</p>
+            )}
           </Card>
         ))}
       </section>
