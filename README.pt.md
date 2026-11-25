@@ -1,43 +1,63 @@
 # site-ai-widget
 
-[English](README.md)
+[English](README.md) | **Português**
 
-![Demonstração: um visitante abre o widget no sítio fictício da Mercearia Atlas, pergunta o preço do azeite (resposta da base de dados), pergunta pela política de devoluções (resposta do PDF com citação da página) e abre a página citada do PDF](docs/media/demo.gif)
+**Um assistente de IA que qualquer empresa pode pôr no seu sítio com uma única tag de script: responde aos visitantes a partir dos PDF da empresa, com citação da página, e da sua própria base de dados através de text-to-SQL seguro — tudo gerido num painel de administração.**
 
-▶ [Ver o vídeo completo da demonstração (widget + painel, MP4)](docs/media/demo.mp4)
+[![tests](https://github.com/PedroPinho17/site-ai-widget/actions/workflows/tests.yml/badge.svg)](https://github.com/PedroPinho17/site-ai-widget/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 
-Assistente de IA incorporável no sítio de uma empresa. O visitante pergunta num widget de chat; as respostas vêm de **PDF carregados** (com citação da página) e da **base de dados da empresa**, através de text-to-SQL controlado. A equipa usa um **painel de administração** (documentos, aprovação do esquema, aspeto do widget, conversas, dashboard).
+<p align="center">
+  <img src="docs/media/demo.gif" alt="Demonstração: um visitante abre o widget no sítio fictício da Mercearia Atlas, pergunta o preço do azeite (resposta da base de dados), pergunta pela política de devoluções (resposta do PDF com citação da página) e abre a página citada do PDF" width="900">
+</p>
+<p align="center"><sub><a href="docs/media/demo.mp4">Vídeo completo da demonstração — widget + painel (.mp4)</a></sub></p>
 
-Os dados de demonstração são fictícios (Mercearia Atlas, Oficina Lima). Não há ficheiro de licença.
+> Todos os dados são fictícios (Mercearia Atlas e Oficina Lima, os respetivos manuais em PDF e uma base de dados de cliente de demonstração). Nenhuma empresa, cliente ou pessoa real está representada.
 
-**Autor:** [Pedro Pinho](https://github.com/PedroPinho17) · [LinkedIn](https://www.linkedin.com/in/pedropinho19/)
+## Visão geral
+
+As pequenas lojas respondem todos os dias às mesmas perguntas — preços, stock, horários, devoluções. As respostas já existem, repartidas entre **PDF** (manuais, políticas) e a **base de dados da própria loja**. Este widget permite a uma empresa acrescentar um assistente ao seu sítio com uma tag `<script>`. Cada pergunta vai **primeiro à base de dados** (text-to-SQL sobre as tabelas que o administrador aprovou), **depois aos documentos** (pesquisa híbrida com citação da página) e, se nada servir, o assistente **diz que não sabe** em vez de inventar uma resposta. Os visitantes podem perguntar em **português ou inglês**, e os dados de cada empresa estão isolados dos das outras.
+
+## Funcionalidades principais
+
+- **Uma tag de script** — o `embed.js` acrescenta um chat flutuante num Shadow DOM fechado, com ecrã inteiro, sugestões, limpar conversa e textos em PT/EN.
+- **Respostas da base de dados, com segurança** — o LLM só vê as tabelas e colunas que um administrador aprovou; o SQL é validado com `sqlglot` e executado numa transação só de leitura, com tempos limite e limite de linhas. Colunas sensíveis (palavras-passe, NIF, emails) nunca podem ser aprovadas.
+- **Respostas dos PDF com citação da página** — pesquisa vetorial (embeddings e5 locais, pgvector) + full-text, combinadas com RRF; as citações só apontam para páginas realmente encontradas, e o visitante pode abrir a página citada através de uma ligação assinada de curta duração.
+- **Sem respostas inventadas** — a resposta do SQL é verificada para não acrescentar números que não estão nas linhas; quando nada corresponde, a resposta é «não sei», sem fontes.
+- **Painel de administração** (React + TypeScript) — dashboard, documentos com pré-visualização, ligação à base de dados e aprovação do esquema, conversas, testar assistente, aspeto do widget com seletor de cor, verificação de contraste e pré-visualização ao vivo, chaves e origens permitidas. Em português e inglês.
+- **Multiempresa de raiz** — o `company_id` vem do JWT do painel ou da chave do widget, nunca da pergunta; as credenciais das bases de dados dos clientes são cifradas; cada chave só funciona nas origens permitidas.
 
 ## Capturas de ecrã
 
-Todas as capturas vêm da demonstração local, com dados fictícios. O painel aparece em inglês (também está disponível em português).
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/widget-price.png" alt="Widget de chat no sítio de demonstração a responder a «Quanto custa o azeite?» com o preço vindo da base de dados" width="100%"><br><sub>Resposta da base de dados: pergunta de preço → text-to-SQL seguro</sub></td>
+    <td width="50%"><img src="docs/media/widget-doc.png" alt="Widget a responder à pergunta sobre devoluções a partir do manual em PDF, com citação da página 3" width="100%"><br><sub>Resposta de documento com citação da página</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/panel-widget.png" alt="Definições do widget com seletor de cor, indicador de contraste, cores predefinidas e pré-visualização ao vivo" width="100%"><br><sub>Definições do widget: seletor de cor e pré-visualização ao vivo</sub></td>
+    <td width="50%"><img src="docs/media/panel-conversations.png" alt="Conversa de um visitante aberta no painel, com a resposta da base de dados e a resposta de documento identificadas pela origem" width="100%"><br><sub>Conversas: cada resposta identificada pela origem</sub></td>
+  </tr>
+</table>
 
-| | |
-|---|---|
-| <img src="docs/media/widget-price.png" width="420" alt="Widget de chat no sítio de demonstração a responder a «Quanto custa o azeite?» com o preço vindo da base de dados"> | <img src="docs/media/widget-doc.png" width="420" alt="Widget a responder à pergunta sobre devoluções a partir do manual em PDF, com citação da página 3"> |
-| **Resposta da base de dados:** preço via text-to-SQL seguro | **Resposta de documento:** factos do PDF com citação da página |
-| <img src="docs/media/widget-fullscreen.png" width="420" alt="Widget em modo de ecrã inteiro com a conversa completa"> | <img src="docs/media/panel-dashboard.png" width="420" alt="Dashboard do painel com contagem de documentos, tabelas e chaves, perguntas por dia e origem das respostas"> |
-| **Widget em ecrã inteiro** | **Dashboard do painel:** utilização e origem das respostas |
-| <img src="docs/media/panel-documents.png" width="420" alt="Página de documentos com o manual em PDF carregado e pré-visualização"> | <img src="docs/media/panel-widget.png" width="420" alt="Definições do widget com seletor de cor, indicador de contraste, cores predefinidas e pré-visualização ao vivo"> |
-| **Documentos:** carregar e pré-visualizar | **Definições do widget:** seletor de cor e pré-visualização ao vivo |
-| <img src="docs/media/panel-test.png" width="420" alt="Página Testar assistente a responder à pergunta sobre devoluções com a citação do documento e o tempo de resposta"> | <img src="docs/media/panel-conversations.png" width="420" alt="Página de conversas com as conversas dos visitantes, idioma, número de mensagens e origem da resposta"> |
-| **Testar assistente:** experimentar perguntas antes de publicar | **Conversas:** conversas dos visitantes por data e origem |
+<details>
+<summary>Mais capturas</summary>
 
-## Stack
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/widget-fullscreen.png" alt="Widget em modo de ecrã inteiro com a conversa completa" width="100%"><br><sub>Widget em ecrã inteiro</sub></td>
+    <td width="50%"><img src="docs/media/panel-dashboard.png" alt="Dashboard do painel com contagem de documentos, tabelas e chaves, perguntas por dia e origem das respostas" width="100%"><br><sub>Dashboard: utilização e origem das respostas</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/panel-documents.png" alt="Página de documentos com o manual em PDF carregado e pré-visualização" width="100%"><br><sub>Documentos: carregar e pré-visualizar</sub></td>
+    <td width="50%"><img src="docs/media/panel-test.png" alt="Página Testar assistente a responder à pergunta sobre devoluções com a citação do documento e o tempo de resposta" width="100%"><br><sub>Testar assistente: experimentar perguntas antes de publicar</sub></td>
+  </tr>
+</table>
 
-- **API:** Python 3.13, FastAPI, uv  
-- **Armazenamento:** PostgreSQL 17 + pgvector (base da aplicação)  
-- **LLM:** Groq (compatível com OpenAI; modelo predefinido `openai/gpt-oss-120b`)  
-- **Embeddings:** `intfloat/multilingual-e5-small` local (Hugging Face, CPU)  
-- **SQL:** validador sqlglot, sessão de cliente só de leitura  
-- **Painel:** Vite, React, TypeScript  
-- **Widget:** `embed.js` (Shadow DOM fechado)
+As capturas do painel estão em inglês; o painel também está disponível em português.
 
-O escalão gratuito da Groq e o modelo e5 local chegam para correr a demo. Não é obrigatório outro serviço pago.
+</details>
 
 ## Arquitetura
 
@@ -48,10 +68,10 @@ flowchart TB
   embed["GET /embed.js"]
   ask["answer_question"]
   sql["Text-to-SQL no esquema aprovado"]
-  docs["Pesquisa híbrida em PDF + LLM"]
+  docs["Pesquisa híbrida nos PDF + LLM"]
   none["Resposta desconhecida, sem fontes"]
   clientdb[(Postgres da empresa)]
-  appdb[(Postgres da aplicação + pgvector)]
+  appdb[(Postgres da app + pgvector)]
 
   visitor --> embed
   embed -->|"POST /v1/widget/{key}/ask"| ask
@@ -60,82 +80,99 @@ flowchart TB
   sql -->|linhas| visitor
   sql -->|sem linhas úteis| docs
   docs -->|resposta fundamentada| visitor
-  docs -->|sem correspondência| none
+  docs -->|sem correspondência / não sabe| none
   sql --> clientdb
   docs --> appdb
 ```
 
-## Funcionalidades
+Fluxo de um pedido, deteção de idioma, seleção do esquema, validação das respostas, multiempresa e modelo de dados: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (em inglês).
 
-- **Widget:** chat flutuante, ecrã inteiro opcional, textos PT/EN, cor e contraste, limpar conversa, sugestões  
-- **Documentos:** carregamento de PDF, pesquisa híbrida, citações de página; ligações assinadas de curta duração para o visitante (opcional)  
-- **Base de dados:** DSN só de leitura, introspeção, aprovação de tabelas/colunas, text-to-SQL  
-- **Páginas do painel:** Dashboard, Documentos, Base de dados, Conversas, Testar assistente, Widget, Chaves e origens  
-- **i18n:** painel e widget em português europeu e inglês  
-- **Sugestões:** perguntas geradas a partir dos documentos (o administrador pode escrever as suas)  
-- **Retenção:** sessões de visitante apagadas após a janela da empresa (predefinição 30 dias, 1–365)
+## Tecnologias
+
+| Área | Ferramentas |
+|---|---|
+| Backend | Python 3.13, FastAPI, uv, psycopg 3 |
+| Base de dados | PostgreSQL 17, pgvector, pesquisa full-text, migrações SQL versionadas |
+| IA | Groq (API compatível com OpenAI, modelo por omissão `openai/gpt-oss-120b`), sqlglot, sentence-transformers (`intfloat/multilingual-e5-small`, CPU local) |
+| Frontend | Painel: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query · Widget: JavaScript sem dependências |
+| Operações | Docker Compose, GitHub Actions |
+
+O **plano gratuito** da Groq e o modelo e5 local chegam para correr a demonstração; não é preciso nenhum serviço pago na nuvem.
+
+## Segurança
+
+- **Isolamento entre empresas** — o `company_id` vem do JWT ou da chave do widget, nunca do corpo do pedido. Linhas de outras empresas devolvem **404**.
+- **Execução do SQL** — `SET TRANSACTION READ ONLY`, `statement_timeout` de 5 s, tempo limite de bloqueio, cursor com nome, máximo de **500** linhas / 1 MiB.
+- **Validador de SQL** — sqlglot: uma única consulta de leitura, só tabelas/colunas aprovadas, comentários removidos, `LIMIT` obrigatório (100 por omissão, máximo 500). Escritas, DDL e funções desconhecidas são recusadas.
+- **Aprovação do esquema** — uma coluna só pode ser usada se a **tabela e a coluna** estiverem aprovadas. Nomes sensíveis (p. ex. password, NIF, email) não podem ser aprovados.
+- **Ligações cifradas** — os DSN dos clientes são guardados com Fernet (`CONNECTIONS_KEY`); a palavra-passe nunca é devolvida pela API.
+- **Origens** — CORS do widget só em `/v1/widget/*`; cada chave tem uma lista exata de `scheme://host[:port]` permitidos.
+- **Limites de pedidos** — por IP no login, nas perguntas (cada `/ask` conta **3**), nas chaves do widget, nas consultas do widget e em testar assistente.
+- **Widget** — Shadow DOM fechado, sem `innerHTML` com texto do modelo, folhas de estilo construídas.
+- **Ligações para PDF** — as ligações para visitantes são assinadas com HMAC (`/v1/signed-documents/{id}`), 300 s por omissão (máximo 900 s), e só quando a empresa ativa `allow_visitor_documents`.
+- **Sessões** — o token do visitante é devolvido uma vez; só se guarda o SHA-256. As sessões dos visitantes são apagadas no fim do período de retenção da empresa (30 dias por omissão, 1–365).
+
+## Avaliação
+
+40 perguntas escritas à mão sobre a Mercearia Atlas fictícia (`eval/questions.json`), executadas de ponta a ponta pelo mesmo código do widget.
+
+**Última avaliação completa (25 nov. 2026, plano gratuito da Groq): 29/40 corretas (72,5%)**
+
+| Tipo | Corretas | O que se verifica |
+|---|---|---|
+| SQL | 15/20 | As mesmas linhas da consulta de referência (ignora a ordem, os nomes das colunas e até 2 colunas extra de identificação; tolerância numérica de 0,01) |
+| Documentos | 11/15 | A resposta contém o facto de referência e cita a página certa quando cita |
+| Recusas | 3/5 | Nenhum SQL executado e uma resposta de recusa/desconhecida |
+
+A avaliação corre em lotes, espera e repete quando atinge os limites de quota da Groq, guarda um checkpoint e pode ser retomada. Corra-a dentro do contentor da app, para o anfitrião `clientdb` da base de dados do cliente resolver:
+
+```bash
+docker compose up -d --build
+docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
+docker compose exec app python -m site_ai_widget.evaluate --resume
+```
+
+O relatório de cada execução (`docs/evaluation.md`) e os resultados brutos (`eval/results/`) são gerados localmente e não entram no repositório. Detalhes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (em inglês).
 
 ## Arranque rápido
 
-É preciso Docker, Node.js (painel) e Python 3.13 se for semear ou testar no anfitrião.
+Precisa de Docker, Node.js (para o painel) e de uma [chave da API da Groq](https://console.groq.com/keys) gratuita.
 
-1. Clone o repositório e copie os exemplos de ambiente. **Não faça commit do `.env`.** Preencha valores seus (nunca coloque segredos reais no git):
+```bash
+cp .env.example .env              # preencha as variáveis abaixo
+cp panel/.env.example panel/.env  # VITE_API_URL, por omissão http://127.0.0.1:8002
+docker compose up -d --build      # BD da app, BD de cliente de demonstração e API em 127.0.0.1:8002
+```
 
-   ```bash
-   cp .env.example .env
-   cp panel/.env.example panel/.env
-   ```
+As migrações correm quando a app arranca. Com `RUN_SEED=1` no `.env`, as empresas de demonstração e os respetivos PDF também são criados (ou corra `uv run site-ai-widget-seed` no anfitrião).
 
-   No `.env` defina pelo menos:
+Painel de administração:
 
-   - `JWT_SECRET` — no mínimo 32 caracteres aleatórios (`uv run python -c "import secrets; print(secrets.token_urlsafe(32))"`)  
-   - `POSTGRES_PASSWORD` e `DATABASE_URL` — a mesma palavra-passe nos dois; porto **5435**  
-   - `DEMO_PASSWORD_ATLAS` e `DEMO_PASSWORD_LIMA` — acessos de demo ao painel (obrigatórios para o seed; **não estão no repositório**)  
-   - `CLIENTDB_PASSWORD` e `ATLAS_READONLY_PASSWORD` — Postgres de cliente de demo  
-   - `CONNECTIONS_KEY` — chave Fernet (`uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)  
-   - `GROQ_API_KEY` — segunda chave opcional `GROQ_API_KEY_FALLBACK` para HTTP 429  
-   - `CLIENTDB_ALLOWED_HOSTS` — em local `127.0.0.1:5436`; o Compose já define `clientdb:5432` no serviço **app**  
-   - `RUN_SEED=1` se quiser que o Compose semeie a Mercearia Atlas / Oficina Lima ao arrancar  
+```bash
+cd panel
+npm install
+npm run dev                       # http://127.0.0.1:5173
+```
 
-   Em `panel/.env` basta `VITE_API_URL` (predefinição `http://127.0.0.1:8002`).
+Página da loja de demonstração com o widget:
 
-2. Subir a stack (base da aplicação, base de cliente de demo, API). O Compose publica a API em `127.0.0.1:8002` e o Postgres em `127.0.0.1:5435` / `127.0.0.1:5436`:
+```bash
+cd examples
+python -m http.server 5500        # http://127.0.0.1:5500/demo-site.html
+```
 
-   ```bash
-   docker compose up -d --build
-   ```
+| Login de demonstração | Empresa | Palavra-passe |
+|---|---|---|
+| `admin@mercearia-atlas.example` | Mercearia Atlas (base de dados + PDF) | `DEMO_PASSWORD_ATLAS` no seu `.env` |
+| `admin@oficina-lima.example` | Oficina Lima (PDF) | `DEMO_PASSWORD_LIMA` no seu `.env` |
 
-   As migrações correm no ponto de entrada da app. Com `RUN_SEED=1`, empresas e PDF de demo são semeados aí. Também pode semear no anfitrião: `uv run site-ai-widget-seed`.
+`GET http://127.0.0.1:8002/health` verifica a API. O `POSTGRES_PASSWORD` só se aplica quando o volume `pgdata` é criado pela primeira vez; mudá-lo depois obriga a `docker compose down -v`, que apaga os dados locais.
 
-3. Painel:
-
-   ```bash
-   cd panel
-   npm install
-   npm run dev
-   ```
-
-   Abra `http://127.0.0.1:5173`. Endereços de correio eletrónico de demo (as palavras-passe são só as que pôs no `.env`):
-
-   - `admin@mercearia-atlas.example`  
-   - `admin@oficina-lima.example`
-
-4. Página de loja de demo:
-
-   ```bash
-   cd examples
-   python -m http.server 5500
-   ```
-
-   Abra [http://127.0.0.1:5500/demo-site.html](http://127.0.0.1:5500/demo-site.html). O seed da Atlas coloca `http://127.0.0.1:5500` na lista de origens da chave pública.
-
-`GET http://127.0.0.1:8002/health` confirma a API.
-
-A `POSTGRES_PASSWORD` só é aplicada quando o volume `pgdata` é criado. Alterá-la depois no `.env` não muda o Postgres; só recrie volumes (`docker compose down -v`) se aceitar perder os dados locais.
+Testes, migrações, reconstrução e resolução de problemas: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (em inglês).
 
 ## Incorporar o widget
 
-Chave pública de demo (identificador de embed, não é palavra-passe): `wk_demo_mercearia_atlas`.
+A chave pública de demonstração é um identificador, não uma palavra-passe. A origem da página tem de estar na lista permitida da chave.
 
 ```html
 <script
@@ -146,43 +183,49 @@ Chave pública de demo (identificador de embed, não é palavra-passe): `wk_demo
 ></script>
 ```
 
-O script é `GET /embed.js`. A origem tem de coincidir exatamente com a lista da chave.
+## Configuração
 
-## Segurança
+Definida no `.env` (ver [`.env.example`](.env.example)). Nunca faça commit de valores reais.
 
-- **Isolamento:** o `company_id` vem do JWT ou da chave do widget, nunca do corpo da pergunta. Dados de outra empresa devolvem **404**.  
-- **Execução SQL:** `SET TRANSACTION READ ONLY`, `statement_timeout` de 5 s, timeout de bloqueio, cursor com nome, teto de **500** linhas / 1 MiB.  
-- **Validador:** sqlglot — uma única consulta de leitura, só tabelas/colunas aprovadas, comentários removidos, `LIMIT` obrigatório (predefinição 100, máximo 500). Escritas, DDL e funções desconhecidas são recusadas.  
-- **Aprovação:** uma coluna só entra no SQL se **tabela e coluna** estiverem `approved`. Nomes sensíveis (palavra-passe, NIF, email, etc.) não podem ser aprovados.  
-- **DSN:** cifrado com Fernet (`CONNECTIONS_KEY`); a API nunca devolve a palavra-passe.  
-- **Origens:** CORS do widget só em `/v1/widget/*`; origens canónicas `scheme://host[:port]`.  
-- **Limites de ritmo:** por IP em autenticação, perguntas (peso **3** por `/ask`), chave do widget, pesquisa de chave, teste do assistente.  
-- **Widget:** Shadow DOM fechado, sem `innerHTML` do texto do modelo, folhas de estilo construtíveis.  
-- **PDF:** ligações HMAC (`/v1/signed-documents/{id}`), TTL predefinido 300 s (máx. 900 s), só com `allow_visitor_documents`.  
-- **Sessões:** o token do visitante é mostrado uma vez; guarda-se só o SHA-256.
+| Variável | Para que serve |
+|---|---|
+| `POSTGRES_PASSWORD`, `DATABASE_URL` | Base de dados da app (porta 5435 no anfitrião); a mesma palavra-passe nas duas |
+| `JWT_SECRET` | Sessões do painel; pelo menos 32 caracteres aleatórios, senão a API não arranca |
+| `DEMO_PASSWORD_ATLAS`, `DEMO_PASSWORD_LIMA` | Logins de demonstração do painel (obrigatórios para o seed, sem valores por omissão) |
+| `CLIENTDB_PASSWORD`, `ATLAS_READONLY_PASSWORD` | Base de dados de cliente de demonstração (dono e role só de leitura) |
+| `CONNECTIONS_KEY` | Chave Fernet que cifra as ligações guardadas às bases de dados dos clientes |
+| `CLIENTDB_ALLOWED_HOSTS` | Pares `host:porta` privados que o teste de ligação pode alcançar (localmente `127.0.0.1:5436`; o Compose define `clientdb:5432` para a app) |
+| `GROQ_API_KEY`, `GROQ_API_KEY_FALLBACK` | Chave do LLM e uma segunda chave opcional usada em HTTP 429 / quota |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_TIMEOUT_SECONDS` | Opcional: qualquer endpoint compatível com OpenAI |
+| `PANEL_ORIGINS` | Origens do painel permitidas pelo CORS (nunca `*`) |
+| `RUN_SEED` | `1` cria as empresas e os PDF de demonstração no arranque |
+| `TRUSTED_PROXY_IPS` | IP/CIDR opcionais de proxies que podem indicar o IP do cliente (por omissão: só loopback) |
+| `AUTH_RATE_LIMIT`, `API_RATE_LIMIT`, `ASK_RATE_LIMIT` (+ `_WINDOW`) | Limites de pedidos opcionais |
+| `MAX_UPLOAD_MB`, `MAX_PDF_PAGES`, `MAX_DOCUMENTS`, `MAX_QUESTION_CHARS` | Limites opcionais de documentos e perguntas |
+| `APP_PORT`, `ENABLE_DOCS`, `JWT_HOURS`, `EMBEDDING_MODEL` | Definições opcionais de execução |
 
-## Avaliação
-
-O conjunto está em `eval/questions.json` (40 itens fictícios da Atlas). Corra **dentro do contentor da app** para o anfitrião `clientdb` resolver. O Compose monta `./eval` e `./docs` em `/app`: as perguntas vêm do anfitrião e `eval/results/`, `eval/history.csv` e `docs/evaluation.md` voltam para o repositório (não ficam na imagem). Arranque primeiro todos os serviços (`docker compose up -d --build`; só `up -d app` não arranca o `clientdb`).
+## Testes e CI
 
 ```bash
-docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
+uv run ruff check .
+uv run pytest tests/unit          # sem LLM nem rede; os testes de base de dados são ignorados sem Postgres
+uv run pytest                     # + testes de integração num PostgreSQL real (docker compose up -d db)
+cd panel && npm test && npm run typecheck && npm run lint
 ```
 
-Se a base de dados do cliente estiver inacessível, a avaliação pára com `client DB unreachable` e não escreve `docs/evaluation.md` nem `eval/history.csv`.
+Mais de 1000 testes Python cobrem o validador de SQL contra padrões de ataque, o isolamento entre empresas, as ligações assinadas para PDF, as origens e os limites de pedidos, a API do widget, o executor da avaliação e mais. 95 testes Vitest cobrem o painel.
 
-**Última avaliação completa (25 nov. 2026, plano gratuito da Groq): 29/40 corretas (72,5%)**
+O [GitHub Actions](.github/workflows/tests.yml) corre o ruff e os testes unitários Python em cada push e pull request, sem segredos.
 
-| Tipo | Corretas | O que se verifica |
-|---|---|---|
-| SQL | 15/20 | As mesmas linhas da query de referência (ignora a ordem, os nomes das colunas e até 2 colunas extra de identificação; tolerância numérica de 0,01) |
-| Documentos | 11/15 | A resposta contém o facto de referência e cita a página certa quando cita |
-| Recusas | 3/5 | Nenhum SQL executado e uma resposta de recusa/desconhecida |
+## Próximos passos
 
-O relatório de cada execução (`docs/evaluation.md`) e os resultados brutos (`eval/results/`) são gerados localmente e não entram no repositório.
+- Melhor recuperação nos documentos e melhor tratamento das recusas (as áreas mais fracas na avaliação).
+- Limites de pedidos partilhados (p. ex. Redis) — hoje ficam em memória, por processo.
+- Verificações do painel (Vitest, typecheck, lint) no CI.
+- Um conjunto de avaliação maior, incluindo a Oficina Lima.
 
-## Documentação
+## Autor
 
-- [Arquitetura](docs/ARCHITECTURE.md) (inglês)  
-- [Desenvolvimento](docs/DEVELOPMENT.md) (inglês)  
-- [README in English](README.md)
+**Pedro Pinho** — [GitHub](https://github.com/PedroPinho17) · [LinkedIn](https://www.linkedin.com/in/pedropinho19/)
+
+Sem licença open source: todos os direitos reservados.
