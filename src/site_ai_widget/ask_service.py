@@ -38,6 +38,17 @@ _BUSY_MESSAGE = {
 }
 _MAX_SQL_ROWS = 500
 _HARD_QUESTION_CHARS = 1000
+# A question this short ("E o stock?", "And in Arroios?") may lean on the one
+# before it; a longer question stands on its own and gets no context.
+FOLLOW_UP_MAX_WORDS = 6
+
+
+def follow_up_context(question: str, previous_question: str | None) -> str | None:
+    """The previous question when ``question`` looks like a short follow-up, else None."""
+    previous = " ".join((previous_question or "").split())[:_HARD_QUESTION_CHARS]
+    if not previous or len(question.split()) > FOLLOW_UP_MAX_WORDS:
+        return None
+    return previous
 
 
 class AskCitation(BaseModel):
@@ -70,6 +81,7 @@ def answer_question(
     *,
     lang: str | None = None,
     previous_lang: str | None = None,
+    previous_question: str | None = None,
     sql_fn=None,
     docs_fn=None,
     present_fn=None,
@@ -81,6 +93,8 @@ def answer_question(
     ``lang`` is the widget ``data-lang`` / request hint; the answer language
     follows the visitor question (see :func:`resolve_answer_lang`).
     ``previous_lang`` is used for short follow-ups (``ok``, ``Olá``).
+    ``previous_question`` is the visitor's last question; a short follow-up
+    ("E o stock?") gets it as context (see :func:`follow_up_context`).
     """
     settings = get_settings()
     max_chars = min(settings.max_question_chars, _HARD_QUESTION_CHARS)
@@ -118,10 +132,17 @@ def answer_question(
     if present_fn is None:
         present_fn = present_sql_answer
 
+    context = follow_up_context(question, previous_question)
+    # Context is passed only when there is some, so injected test doubles with
+    # the plain (company_id, question) signature keep working.
+    extra = {"previous_question": context} if context else {}
+    if context:
+        log.info("ask stage=follow_up")
+
     sql_answer = None
     llm_busy = False
     try:
-        sql_answer = sql_fn(company_id, question)
+        sql_answer = sql_fn(company_id, question, **extra)
     except ApiError as exc:
         llm_busy = exc.code == "llm_unavailable"
         log.warning("ask/sql failed: %s", exc.code)
@@ -196,7 +217,7 @@ def answer_question(
             )
 
     try:
-        docs = docs_fn(company_id=company_id, question=question)
+        docs = docs_fn(company_id=company_id, question=question, **extra)
     except ApiError as exc:
         if exc.code == "llm_unavailable":
             log.warning("ask reason=llm_busy")

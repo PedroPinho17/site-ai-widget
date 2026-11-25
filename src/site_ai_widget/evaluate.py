@@ -188,6 +188,8 @@ def _default_ask(company_id: str, item: dict[str, Any], tracker: dict[str, Any])
             company_id,
             item["question"],
             lang=item.get("lang"),
+            # Follow-up items carry the question they follow, as a client would.
+            previous_question=item.get("previous_question"),
         )
     finally:
         sql_runner.run_sql = original_run  # type: ignore[method-assign]

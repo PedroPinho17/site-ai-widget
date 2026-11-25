@@ -74,6 +74,8 @@
   /* Language of the last answer, as decided by the server. The widget never
      guesses a language itself; it only sends this back for short follow-ups. */
   var previousLang = null;
+  /* Last question that got an answer: context for a short follow-up ("E o stock?"). */
+  var previousQuestion = null;
   var copy = STRINGS[lang];
   var apiBase = apiBaseFrom(script.src || "");
   var storageKey = "site-ai-widget:" + key + ":session";
@@ -967,6 +969,7 @@
       }
       /* A new conversation: no language carried over from the old one. */
       previousLang = null;
+      previousQuestion = null;
       this._historyStarted = true;
       this._showGreeting();
     }
@@ -1079,6 +1082,9 @@
       if (previousLang) {
         payload.previous_lang = previousLang;
       }
+      if (previousQuestion) {
+        payload.previous_question = previousQuestion;
+      }
       postJson(widgetPath("ask"), payload)
         .then(function (res) {
           return readJson(res).then(function (data) {
@@ -1098,6 +1104,7 @@
           if (result.data.lang === "pt" || result.data.lang === "en") {
             previousLang = result.data.lang;
           }
+          previousQuestion = text;
           var token = result.data.session_token;
           if (typeof token === "string" && token) {
             writeToken(token);

@@ -476,10 +476,15 @@ export type AssistantTestResponse = {
 export function testAssistantRequest(
   question: string,
   previousLang?: "pt" | "en" | null,
+  previousQuestion?: string | null,
 ): Promise<AssistantTestResponse> {
-  const body: { question: string; previous_lang?: "pt" | "en" } = { question };
+  const body: { question: string; previous_lang?: "pt" | "en"; previous_question?: string } = { question };
   if (previousLang === "pt" || previousLang === "en") {
     body.previous_lang = previousLang;
+  }
+  // Context for a short follow-up ("E o stock?"); the API ignores it for longer questions.
+  if (previousQuestion) {
+    body.previous_question = previousQuestion.slice(0, 1000);
   }
   return api("/assistant/test", {
     method: "POST",

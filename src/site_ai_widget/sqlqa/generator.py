@@ -82,7 +82,9 @@ RETRY_HINTS: dict[str, str] = {
     "unaccent(lower(col)) ILIKE unaccent(lower('%word%')), not with =; "
     "use a singular stem (queijos → %queijo%); for several words use AND of those "
     "patterns; search products.name or categories.name; join stock on "
-    "product_id = products.id; drop unnecessary joins and try a simpler SELECT",
+    "product_id = products.id; put each text filter on the column that holds it "
+    "(a store named after its area is matched on stores.name, not stores.city); "
+    "drop unnecessary joins and try a simpler SELECT",
 }
 GENERIC_RETRY_HINT = "follow every rule above"
 _HINT_VALUES = frozenset(RETRY_HINTS.values()) | {GENERIC_RETRY_HINT}
@@ -102,8 +104,12 @@ def build_sql_messages(
     schema: SchemaSlice,
     *,
     previous_error: str | SQLRejected | None = None,
+    previous_question: str | None = None,
 ) -> list[dict[str, str]]:
     """System + user messages for text-to-SQL. Schema and question are marked untrusted.
+
+    ``previous_question`` is the visitor's last question, sent only as context so a
+    short follow-up ("E o stock?") can borrow its subject. It is untrusted too.
 
     ``previous_error`` is the SQLRejected (or just its reason code) of the last
     attempt. Only a fixed English hint for that reason reaches the prompt — never
@@ -114,6 +120,21 @@ def build_sql_messages(
         _schema_block(schema),
         "</schema>",
         "",
+    ]
+    context = _clean_question(previous_question or "")
+    if context:
+        user_parts.extend(
+            [
+                '<previous_question untrusted="true">',
+                context,
+                "</previous_question>",
+                "The question below may be a follow-up that leaves out its subject "
+                "(e.g. \"and the stock?\"): take the missing product, store or other "
+                "subject from the previous question. Answer only the question below.",
+                "",
+            ]
+        )
+    user_parts += [
         '<question untrusted="true">',
         _clean_question(question),
         "</question>",
@@ -153,6 +174,7 @@ def generate_sql(
     *,
     company_id: str | None = None,
     previous_error: str | SQLRejected | None = None,
+    previous_question: str | None = None,
     llm_complete: Callable[..., str] | None = None,
 ) -> str | None:
     """Ask the LLM for one SELECT, or return None when it declines / schema is empty.
@@ -166,7 +188,9 @@ def generate_sql(
         _log_outcome(company_id, tables, no_sql=True)
         return None
 
-    messages = build_sql_messages(question, schema, previous_error=previous_error)
+    messages = build_sql_messages(
+        question, schema, previous_error=previous_error, previous_question=previous_question
+    )
     complete = llm_complete or complete_chat
     answer = complete(messages, temperature=0)
     sql = _clean_llm_sql(answer)

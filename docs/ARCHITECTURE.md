@@ -13,6 +13,10 @@ Order:
 3. **Documents** — if SQL is `no_sql` / `refused` / `error`, has no rows, or the presenter treats the rows as not answering the question: `docs.ask.ask_documents` (hybrid search + LLM). Hits with a grounded answer → `mode: "docs"` and `sources` from `[n]` citation markers only. A “don’t know” reply is `mode: "none"` with no chips.
 4. **Unknown** — no document match, or docs failure: `mode: "none"` with a fixed visitor-facing sentence.
 
+**Follow-ups.** Clients send the last question as `previous_question` (the widget and the Test assistant page do). When the new question is short (≤ 6 words, e.g. “E o stock?”), it is passed as context to the schema search, the SQL prompt and the document search/prompt, marked untrusted like the question. Longer questions stand alone.
+
+**Guards on the SQL path.** A row of only NULLs (an aggregate over no matching rows) counts as empty, and `COALESCE(SUM(...), 0)` is unwrapped before running, so a filter that matched nothing never becomes a confident “0”; both lead to the no-rows retry. A text filter the model misspelt is repaired from the visitor’s own words (`merceria` → `mercearia`). SQL with a date whose year the visitor never wrote is dropped (`no_sql`), so “1 de Maio” is answered from the documents, not from a weekday guess. Refusals (“I can’t help with that”) and “not in the documents” replies become `mode: "none"`; `【n】` / `【n†…】` citation marks are rewritten to `[n]` so they map to the right page.
+
 If every Groq key is cooling down, unified `/ask` still returns **200** with a short busy message (`notice: "busy"`), not a quota/provider error. `POST /ask/docs` still raises `llm_unavailable` **503** when the LLM cannot run.
 
 Widget sessions: a `session_token` is issued once; only `sha256` is stored (`visitor_sessions`). History is `POST /v1/widget/{key}/history` (last 50 messages).
@@ -49,7 +53,7 @@ Panel UI locale is `users.panel_locale` (`pt` | `en`), separate from the visitor
 
 ## Schema retrieval and pinning
 
-`sqlqa/retrieval.retrieve_schema` embeds the question (`intfloat/multilingual-e5-small`, 384-d) and takes up to **4** nearest **approved**, present tables (approved, present, non-sensitive columns only).
+`sqlqa/retrieval.retrieve_schema` embeds the question (`intfloat/multilingual-e5-small`, 384-d) and takes up to **4** nearest **approved**, present tables (approved, present, non-sensitive columns only). A selected table's `<name>_id` columns then pull in the approved table they point to (`stock.product_id` → `products`), at most **2** extra tables, so a stock question can still name the product.
 
 Catalog-shaped questions (“Que queijos têm?”, “Do you sell …?”) also **pin** up to **2** approved tables that have a price-like column (`price`, `preco`, `unit_price`, `valor`, `cost`, `custo`, `preço`), so product lists are not dropped in favour of stores/hours.
 

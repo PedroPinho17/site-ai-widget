@@ -44,6 +44,16 @@ function previousAnswerLang(messages: ChatMessage[]): "pt" | "en" | null {
   return null;
 }
 
+/** The last question the visitor asked, sent as context for a short follow-up. */
+function previousUserQuestion(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      return messages[i].text;
+    }
+  }
+  return null;
+}
+
 export function TestAssistantPage() {
   const { t } = useI18n();
   const [preview, setPreview] = useState<{ id: string; page: number } | null>(null);
@@ -72,7 +82,11 @@ export function TestAssistantPage() {
     setBusy(true);
     setError("");
     try {
-      const data = await testAssistantRequest(trimmed, previousAnswerLang(messages));
+      const data = await testAssistantRequest(
+        trimmed,
+        previousAnswerLang(messages),
+        previousUserQuestion(messages),
+      );
       setMessages((current) => [
         ...current,
         {

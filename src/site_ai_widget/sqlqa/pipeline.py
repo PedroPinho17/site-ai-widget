@@ -5,7 +5,11 @@ and attempt counts are fine. SqlAnswer never carries SQL or DB error text.
 """
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import difflib
 import logging
+import re
 import time
 import unicodedata
 from collections.abc import Callable
@@ -45,14 +49,18 @@ def answer_with_sql(
     question: str,
     *,
     llm_complete: Callable[..., str] | None = None,
+    previous_question: str | None = None,
 ) -> SqlAnswer:
     """Retrieve schema, generate/validate/run SQL, with at most one retry.
 
     At most two ``generate_sql`` calls. Validator refusals and ``db_error`` retry
     once with a fixed ``retry_hint``; ``timeout`` and ``result_too_large`` do not.
+    ``previous_question`` (a follow-up's context) joins the schema search and the
+    prompt; filters are still checked against the current question only.
     """
     complete = llm_complete or complete_chat
-    schema = retrieve_schema(company_id, question)
+    context = (previous_question or "").strip()
+    schema = retrieve_schema(company_id, f"{context} {question}" if context else question)
     if not schema.tables:
         return _finish(company_id, SqlAnswer(status="no_sql", attempts=1))
 
@@ -68,6 +76,7 @@ def answer_with_sql(
                 schema,
                 company_id=company_id,
                 previous_error=previous_error,
+                previous_question=context or None,
                 llm_complete=complete,
             )
         except ApiError as exc:
@@ -80,6 +89,11 @@ def answer_with_sql(
             raise
         if sql is None:
             return _finish(company_id, SqlAnswer(status="no_sql", attempts=attempts))
+        if _invents_date(sql, f"{context} {question}"):
+            # "1 de Maio" became DATE '2023-05-01': a year nobody asked for, and a
+            # weekly schedule says nothing about holidays. Documents answer instead.
+            log.info("sqlqa/pipeline company=%s stage=invented_date", company_id)
+            return _finish(company_id, SqlAnswer(status="no_sql", attempts=attempts))
 
         refused = False
         reason_code = ""
@@ -88,6 +102,13 @@ def answer_with_sql(
         except SQLRejected as exc:
             refused = True
             reason_code = exc.reason
+
+        if not refused:
+            unwrapped = _unwrap_coalesced_aggregates(validated)
+            if unwrapped is not None:
+                # If the rewrite does not validate, the validated original stays.
+                with contextlib.suppress(SQLRejected):
+                    validated = validate_sql(unwrapped, schema.allowed)
 
         if refused:
             last_reason = reason_code
@@ -115,11 +136,14 @@ def answer_with_sql(
                 SqlAnswer(status=status, reason=exc.reason, attempts=attempts),
             )
 
+        # Text the visitor typed now or in the question this one follows up.
+        typed = f"{context} {question}" if context else question
+        result = _drop_all_null_rows(result)
         if result.row_count == 0:
             result = _relax_empty_text_match(
                 validated,
                 result,
-                question=question,
+                question=typed,
                 company_id=company_id,
                 allowed=schema.allowed,
             )
@@ -380,8 +404,14 @@ def _rewrite_ilike_filters(sql: str, question: str, *, require_plain: bool) -> s
         if pattern is None:
             continue
         core = pattern.strip("%")
-        if not core or not _typed_by_visitor(core, question):
+        if not core:
             continue
+        if not _typed_by_visitor(core, question):
+            # A misspelt copy of the visitor's words ("merceria atlas"): fix it.
+            repaired = _repair_from_question(core, question)
+            if repaired is None:
+                continue
+            core = repaired
         column = _ilike_column(ilike.this)
         if column is None:
             continue
@@ -500,6 +530,7 @@ def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str,
                 exc.reason,
             )
             continue
+        relaxed_result = _drop_all_null_rows(relaxed_result)
         log.info(
             "sqlqa/pipeline company=%s stage=relax_text validation=pass rows=%s",
             company_id,
@@ -510,6 +541,86 @@ def _relax_empty_text_match(sql: str, result, *, question: str, company_id: str,
     if not tried:
         log.info("sqlqa/pipeline company=%s stage=relax_text skipped=1 rows=0", company_id)
     return result
+
+
+def _drop_all_null_rows(result):
+    """An aggregate over no matching rows (``SUM`` / ``MAX`` …) returns one row of
+    NULLs. That is "nothing found", not "1 result": treat it as empty so the
+    text-filter relaxation and the no-rows retry still run."""
+    rows = list(getattr(result, "rows", None) or [])
+    if not rows or any(cell is not None for row in rows for cell in row):
+        return result
+    if dataclasses.is_dataclass(result):
+        return dataclasses.replace(result, rows=[], row_count=0, truncated=False)
+    return result
+
+
+_AGGREGATES = (exp.Sum, exp.Min, exp.Max, exp.Avg)
+
+
+def _unwrap_coalesced_aggregates(sql: str) -> str | None:
+    """``COALESCE(SUM(x), 0)`` → ``SUM(x)``.
+
+    Over no matching rows the COALESCE turns "nothing found" into a confident
+    0 ("Há 0 unidades"). Without it the result is a NULL row, which the pipeline
+    treats as empty and retries. COUNT is left alone: its 0 is a real count.
+    Returns None when there is nothing to unwrap.
+    """
+    tree = _parse(sql)
+    if tree is None:
+        return None
+    changed = False
+    for node in list(tree.find_all(exp.Coalesce)):
+        inner = node.this
+        defaults = list(node.expressions or [])
+        if isinstance(inner, _AGGREGATES) and defaults and all(isinstance(d, exp.Literal) for d in defaults):
+            node.replace(inner.copy())
+            changed = True
+    if not changed:
+        return None
+    return tree.sql(dialect="postgres")
+
+
+_DATE_LITERAL = re.compile(r"'((?:19|20)\d{2})-\d{2}-\d{2}")
+
+
+def _invents_date(sql: str, question: str) -> bool:
+    """A date literal whose year the visitor never wrote (model-chosen date)."""
+    years = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?!\d)", question or ""))
+    return any(year not in years for year in _DATE_LITERAL.findall(sql or ""))
+
+
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _repair_from_question(text: str, question: str) -> str | None:
+    """Fix a literal the model mistyped, using the visitor's own words.
+
+    Each word of ``text`` must be a word of the question or a close spelling of
+    one (``merceria`` → ``mercearia``, ratio ≥ 0.8). Returns the repaired, folded
+    text when the result appears in the question as typed; otherwise None, so a
+    value the model chose (``status = 'published'``) is never rewritten.
+    """
+    folded = _fold(text)
+    words = _WORD.findall(folded)
+    question_words = list(dict.fromkeys(_WORD.findall(_fold(question))))
+    if not words or not question_words:
+        return None
+    repaired = folded
+    changed = False
+    for word in dict.fromkeys(words):
+        if word in question_words:
+            continue
+        if len(word) < 4:
+            return None
+        close = difflib.get_close_matches(word, question_words, n=1, cutoff=0.8)
+        if not close:
+            return None
+        repaired = re.sub(rf"(?<![^\W_]){re.escape(word)}(?![^\W_])", close[0], repaired)
+        changed = True
+    if not changed or not _typed_by_visitor(repaired, question):
+        return None
+    return repaired
 
 
 def _finish(company_id: str, answer: SqlAnswer) -> SqlAnswer:

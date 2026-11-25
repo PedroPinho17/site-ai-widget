@@ -8,7 +8,7 @@ from uuid import UUID
 from site_ai_widget.api.config import get_settings
 from site_ai_widget.api.errors import ApiError
 from site_ai_widget.db.pool import connection
-from site_ai_widget.docs.prompt import build_messages, map_citations
+from site_ai_widget.docs.prompt import build_messages, map_citations, normalize_markers
 from site_ai_widget.docs.retrieve import hybrid_search
 from site_ai_widget.docs.spacing import restore_source_spacing
 from site_ai_widget.llm.client import complete_chat
@@ -57,10 +57,13 @@ def ask_documents(
     question: str,
     document_ids: list[UUID | str] | None = None,
     llm_complete=None,
+    previous_question: str | None = None,
 ) -> dict[str, Any]:
     """Answer ``question`` from the company's ready documents.
 
     ``llm_complete`` is injectable for tests (defaults to Groq).
+    ``previous_question`` (a short follow-up's context) joins the search text and
+    is shown to the model as context; the answer is still for ``question``.
     """
     settings = get_settings()
     q = question.strip()
@@ -72,7 +75,9 @@ def ask_documents(
     if document_ids:
         ensure_documents_in_company(company_id, document_ids)
 
-    chunks = hybrid_search(company_id, q, document_ids=document_ids)
+    context = " ".join((previous_question or "").split())[: settings.max_question_chars]
+    search_text = f"{context} {q}" if context else q
+    chunks = hybrid_search(company_id, search_text, document_ids=document_ids)
     if not chunks:
         lang = _guess_lang(q)
         # matched=False: search found no text (callers may map this to mode "none").
@@ -81,12 +86,12 @@ def ask_documents(
     if not settings.groq_keys() and llm_complete is None:
         raise ApiError("llm_not_configured", 503)
 
-    messages = build_messages(q, chunks)
+    messages = build_messages(q, chunks, previous_question=context or None)
     complete = llm_complete or complete_chat
     # Never log question text or excerpt content
     log.info("ask/docs company=%s chunks=%s", company_id, len(chunks))
     answer = complete(messages, temperature=0)
-    answer = restore_source_spacing(answer, chunks)
+    answer = normalize_markers(restore_source_spacing(answer, chunks))
     citations = map_citations(answer, chunks)
     # matched=True whenever search returned chunks. No chips on a "no information"
     # reply; otherwise [n] chips, or one per retrieved document if none were cited.

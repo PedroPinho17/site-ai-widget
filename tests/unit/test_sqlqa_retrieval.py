@@ -610,3 +610,65 @@ def test_catalog_pin_finds_the_item_table_by_its_price_column_not_its_name():
     assert "produtos" not in plain
     pin_sql = [sql for sql, _ in conn.calls if "FROM schema_columns" in sql and "EXISTS" in sql]
     assert pin_sql and "company_id" in pin_sql[0] and "NOT c.is_sensitive" in pin_sql[0]
+
+
+# ---------- join closure ----------
+
+
+def test_stock_question_also_gets_the_product_table_it_points_to():
+    """``stock.product_id`` pulls ``products`` in when similarity left it out:
+    "Em que loja há stock de Queijo da Serra?" must be able to name the product."""
+    stores = uuid.UUID("44444444-4444-4444-4444-444444444444")
+    hours = uuid.UUID("55555555-5555-5555-5555-555555555555")
+    conn = _FakeConn(
+        table_rows=[
+            (STOCK_ID, "public", "stock", "table", "Stock"),
+            (stores, "public", "stores", "table", "Stores"),
+            (hours, "public", "opening_hours", "table", "Hours"),
+            (PRODUCTS_ID, "public", "products", "table", "Products"),
+        ],
+        column_rows=[
+            (STOCK_ID, "store_id", "integer", None),
+            (STOCK_ID, "product_id", "integer", None),
+            (STOCK_ID, "quantity", "integer", None),
+            (stores, "name", "text", None),
+            (hours, "opens", "time", None),
+            (PRODUCTS_ID, "name", "text", None),
+        ],
+    )
+    slice_ = retrieve_schema(COMPANY_A, "Em que loja há stock de queijo?", top_k=3, conn=conn)
+    names = [t.table_name for t in slice_.tables]
+    assert names[:3] == ["stock", "stores", "opening_hours"]
+    assert names[3:] == ["products"]
+    assert slice_.allowed[("public", "products")] == frozenset({"name"})
+    # The closure lookup is scoped like the main search: this company, approved, present.
+    closure_sql, closure_params = next(
+        (sql, params) for sql, params in conn.calls if "lower(table_name) = ANY" in sql
+    )
+    flat = _normalized(closure_sql)
+    assert "company_id = %s" in flat and "status = 'approved'" in flat and "is_present" in flat
+    assert closure_params[0] == COMPANY_A
+    assert "products" in closure_params[1]
+
+
+def test_join_closure_adds_nothing_when_the_target_is_already_there_or_missing():
+    conn = _FakeConn(
+        table_rows=[(STOCK_ID, "public", "stock", "table", "Stock")],
+        column_rows=[(STOCK_ID, "supplier_id", "integer", None), (STOCK_ID, "quantity", "integer", None)],
+    )
+    slice_ = retrieve_schema(COMPANY_A, "stock", top_k=1, conn=conn)
+    # "suppliers" is not an approved table here, so nothing is added.
+    assert [t.table_name for t in slice_.tables] == ["stock"]
+
+
+def test_join_closure_is_capped():
+    ids = [uuid.UUID(int=i) for i in range(1, 6)]
+    names = ["orders", "product", "store", "brand", "supplier"]
+    conn = _FakeConn(
+        table_rows=[(ids[0], "public", "orders", "table", None)]
+        + [(ids[i], "public", names[i], "table", None) for i in range(1, 5)],
+        column_rows=[(ids[0], f"{n}_id", "integer", None) for n in names[1:]]
+        + [(ids[i], "name", "text", None) for i in range(1, 5)],
+    )
+    slice_ = retrieve_schema(COMPANY_A, "orders", top_k=1, conn=conn)
+    assert len(slice_.tables) == 1 + retrieval.JOIN_CLOSURE_LIMIT

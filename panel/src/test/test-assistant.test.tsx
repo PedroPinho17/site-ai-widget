@@ -278,7 +278,9 @@ describe("widget currency setting", () => {
     await screen.findByText("answer 2");
 
     expect(bodies[0]).toEqual({ question: "Têm pão de milho?" });
-    expect(bodies[1]).toEqual({ question: "ok", previous_lang: "en" });
+    // The language comes from the last answer; the last question rides along as
+    // follow-up context (the API ignores it for longer questions).
+    expect(bodies[1]).toEqual({ question: "ok", previous_lang: "en", previous_question: "Têm pão de milho?" });
   });
 
   it("does not show source chips on a não-sei answer", async () => {
@@ -334,5 +336,27 @@ describe("widget currency setting", () => {
     await user.type(await screen.findByLabelText("Question"), "Fazem entregas ao domingo?");
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByRole("button", { name: "Documento: Manual.pdf p. 4" })).toBeInTheDocument();
+  });
+
+  it("sends the previous question as context for a follow-up", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    setSession("test-jwt-token", admin);
+    renderPanel("/test");
+
+    await user.click(await screen.findByRole("button", { name: "Qual o preço do azeite?" }));
+    expect(await screen.findByText("O azeite custa 8,49 €.")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox"), "E o stock?{Enter}");
+
+    await waitFor(() => {
+      const asks = fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/assistant/test"));
+      expect(asks).toHaveLength(2);
+    });
+    const bodies = fetchMock.mock.calls
+      .filter(([input]) => String(input).endsWith("/assistant/test"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies[0].previous_question).toBeUndefined();
+    expect(bodies[1]).toMatchObject({ question: "E o stock?", previous_question: "Qual o preço do azeite?" });
   });
 });

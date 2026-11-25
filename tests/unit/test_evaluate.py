@@ -626,15 +626,21 @@ def test_default_ask_tracks_sql_run_through_pipeline_binding(monkeypatch):
 
     monkeypatch.setattr(pipeline, "run_sql", lambda *a, **k: "ran")
 
-    def fake_answer(company_id, question, *, lang=None):
+    seen_context = []
+
+    def fake_answer(company_id, question, *, lang=None, previous_question=None):
         # Same call path as the real pipeline: the name bound inside ``pipeline``.
         assert pipeline.run_sql("SELECT 1", company_id=company_id) == "ran"
+        seen_context.append(previous_question)
         return SimpleNamespace(mode="sql", rows=[[1]], answer="1")
 
     monkeypatch.setattr(ask_service, "answer_question", fake_answer)
     tracker = {"sql_executed": False, "last_error": None}
     _default_ask("cid", {"question": "q", "lang": "pt"}, tracker)
     assert tracker["sql_executed"] is True
+    # A follow-up item sends the question it follows, like the widget does.
+    _default_ask("cid", {"question": "E o stock?", "previous_question": "Preço do azeite?"}, tracker)
+    assert seen_context == [None, "Preço do azeite?"]
     # Patches are undone afterwards.
     assert pipeline.run_sql("x") == "ran"
 

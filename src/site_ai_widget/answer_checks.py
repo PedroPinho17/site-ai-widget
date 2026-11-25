@@ -13,7 +13,8 @@ NO_INFORMATION = re.compile(
     r"não (?:tenho|tem|temos|encontrei|encontramos|há|existe|existem|consta|disponho de|dispomos de) "
     r"(?:essa |esta |qualquer |nenhuma |mais |informações |dados )?(?:informaç|dados\b|registo)|"
     r"não (?:consta|constam) (?:nos|nas|dos|das|no|na|em|que)\b|"
-    r"não (?:há|existe|existem) (?:qualquer |nenhuma )?(?:referência|menção|indicação|registo)|"
+    r"não (?:há|existe|existem|consta|constam) (?:qualquer |nenhuma |nenhum )?"
+    r"(?:referência|menção|indicação|registo)|"
     r"não (?:consigo|é possível) (?:responder|encontrar|confirmar)|"
     r"não (?:foi possível|consegui) (?:encontrar|responder|confirmar)|"
     r"(?:os |nos )?(?:documentos|excertos|dados) não (?:indicam|mencionam|referem|contêm|incluem)|"
@@ -23,7 +24,16 @@ NO_INFORMATION = re.compile(
     r"i (?:do not|don't) know|"
     r"could not find|couldn't find|"
     r"not (?:mentioned|specified|covered|stated|listed) in the (?:documents|excerpts|data)|"
-    r"the (?:documents|excerpts|data) do not (?:mention|say|specify|contain|include))",
+    r"the (?:provided |uploaded |available |given )?(?:documents|excerpts|data) "
+    r"(?:do not|don't|does not|doesn't) (?:mention|say|specify|contain|include)|"
+    # Refusals: the model declines instead of answering ("I'm sorry, but I can't
+    # help with that"). Only the decline itself, never "can't" about a fact.
+    r"\bi (?:can't|can’t|cannot|can not|am unable to|'m unable to) "
+    r"(?:help|assist) with (?:that|this)\b|"
+    r"\bi (?:can't|can’t|cannot|can not) (?:share|provide|show|disclose|give) (?:that|this|those|these)\b|"
+    r"não (?:posso|consigo) ajudar com (?:isso|isto)\b|"
+    r"não (?:posso|consigo) (?:partilhar|fornecer|mostrar|revelar|divulgar|dar) "
+    r"(?:essa|esta|essas|estas|esse|este|isso|isto|tal)\b)",
     re.IGNORECASE,
 )
 

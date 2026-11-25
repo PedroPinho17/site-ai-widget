@@ -19,6 +19,9 @@ from site_ai_widget.sqlqa.validator import AllowedSchema
 log = logging.getLogger("site_ai_widget")
 
 MAX_TOP_K = 4
+# Tables added because a selected table points at them (``stock.product_id`` →
+# ``products``). Without them a stock question cannot name the product.
+JOIN_CLOSURE_LIMIT = 2
 
 # Caps for text written into the LLM prompt (descriptions are free text; names and
 # types come from the client database and are short in a real PostgreSQL).
@@ -245,19 +248,16 @@ def _retrieve(
             return SchemaSlice(tables=(), allowed={})
 
         table_ids = [row[0] for row in table_rows]
-        column_rows = conn.execute(
-            """
-            SELECT table_id, column_name, data_type, description
-            FROM schema_columns
-            WHERE company_id = %s
-              AND table_id = ANY(%s::uuid[])
-              AND status = 'approved'
-              AND is_present
-              AND NOT is_sensitive
-            ORDER BY ordinal
-            """,
-            (company_id, table_ids),
-        ).fetchall()
+        column_rows = list(_approved_columns(conn, company_id, table_ids))
+        extra = _join_targets(conn, company_id, table_rows, column_rows)
+        if extra:
+            extra_ids = [row[0] for row in extra]
+            table_rows.extend(extra)
+            table_ids.extend(extra_ids)
+            wanted = set(extra_ids)
+            column_rows.extend(
+                row for row in _approved_columns(conn, company_id, extra_ids) if row[0] in wanted
+            )
         _restore_iterative_scan(conn, previous)
 
     cols_by_table: dict[object, list[ColumnInfo]] = {tid: [] for tid in table_ids}
@@ -296,6 +296,74 @@ def _retrieve(
         [(t.schema_name, t.table_name) for t in tables],
     )
     return SchemaSlice(tables=tuple(tables), allowed=allowed)
+
+
+def _approved_columns(conn: psycopg.Connection, company_id: str, table_ids: list) -> list:
+    return conn.execute(
+        """
+        SELECT table_id, column_name, data_type, description
+        FROM schema_columns
+        WHERE company_id = %s
+          AND table_id = ANY(%s::uuid[])
+          AND status = 'approved'
+          AND is_present
+          AND NOT is_sensitive
+        ORDER BY ordinal
+        """,
+        (company_id, table_ids),
+    ).fetchall()
+
+
+def _referenced_names(column_rows: list) -> set[str]:
+    """Table names that ``<name>_id`` columns point to: ``product_id`` → product,
+    products, productes (``loja_id`` → lojas). Names only, never values."""
+    names: set[str] = set()
+    for row in column_rows:
+        column = str(row[1]).lower()
+        if column.endswith("_id") and len(column) > 3:
+            base = column[:-3]
+            names.update({base, f"{base}s", f"{base}es"})
+    return names
+
+
+def _join_targets(
+    conn: psycopg.Connection,
+    company_id: str,
+    table_rows: list,
+    column_rows: list,
+) -> list:
+    """Approved tables that selected tables reference by an ``*_id`` column but
+    that the similarity search left out, at most ``JOIN_CLOSURE_LIMIT``.
+
+    Same filters as the main search (this company, approved, present), so a
+    pending, rejected or other-company table is never added.
+    """
+    have = {str(row[2]).lower() for row in table_rows}
+    wanted = _referenced_names(column_rows) - have
+    if not wanted:
+        return []
+    seen = {row[0] for row in table_rows}
+    rows = conn.execute(
+        """
+        SELECT id, schema_name, table_name, kind, description
+        FROM schema_tables
+        WHERE company_id = %s
+          AND status = 'approved'
+          AND is_present
+          AND lower(table_name) = ANY(%s)
+        ORDER BY table_name
+        """,
+        (company_id, sorted(wanted)),
+    ).fetchall()
+    out = []
+    for row in rows:
+        if row[0] in seen or str(row[2]).lower() not in wanted:
+            continue
+        seen.add(row[0])
+        out.append(row)
+        if len(out) >= JOIN_CLOSURE_LIMIT:
+            break
+    return out
 
 
 def _vector_literal(vector: list[float]) -> str:

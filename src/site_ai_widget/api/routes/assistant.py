@@ -18,6 +18,8 @@ class AssistantTestRequest(BaseModel):
     question: str = Field(default="")
     lang: Literal["pt", "en"] | None = None
     previous_lang: Literal["pt", "en"] | None = None
+    # Last visitor question, as context for a short follow-up ("E o stock?").
+    previous_question: str | None = Field(default=None, max_length=1000)
 
 
 @router.post("/test", response_model=AskResponse)
@@ -36,6 +38,7 @@ def test_assistant(
         body.question or "",
         lang=body.lang,
         previous_lang=body.previous_lang,
+        previous_question=body.previous_question,
         sql_fn=answer_with_sql,
         docs_fn=ask_documents,
     )

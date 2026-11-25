@@ -1,6 +1,7 @@
 """Score one evaluation item against an AskResponse-like object."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from site_ai_widget.answer_checks import is_no_information
@@ -37,12 +38,35 @@ def _facts(reference: dict[str, Any]) -> list[str]:
     return facts
 
 
+_TIME_RANGE_FACT = re.compile(r"^\s*(\d{1,2})[:h](\d{2})\s*[-–—]\s*(\d{1,2})[:h](\d{2})\s*$")
+# A clock time in an answer: 08:00, 8:00, 8h00, 8h, 8.00 (not part of a longer number).
+_CLOCK = re.compile(r"(?<![\d,.])(\d{1,2})\s*(?:[:h.]\s*(\d{2})(?!\d)|h(?![a-z]))", re.IGNORECASE)
+
+
+def _clock_times(text: str) -> list[tuple[int, int]]:
+    return [(int(h), int(m or 0)) for h, m in _CLOCK.findall(text)]
+
+
+def _contains_time_range(answer: str, fact: str) -> bool:
+    """``08:00-20:00`` is in the answer as two clock times in that order, in any
+    wording ("das 08:00 às 20:00", "8h00 – 20h00", "from 8:00 to 20:00")."""
+    match = _TIME_RANGE_FACT.match(fact)
+    if not match:
+        return False
+    opens = (int(match[1]), int(match[2]))
+    closes = (int(match[3]), int(match[4]))
+    times = _clock_times(answer)
+    return any(t == opens and closes in times[i + 1 :] for i, t in enumerate(times))
+
+
 def _contains_fact(answer: str, fact: str) -> bool:
     hay = strip_accents(answer).casefold()
     needle = strip_accents(fact).casefold()
     compact_hay = hay.replace(" ", "").replace(":", "")
     compact_needle = needle.replace(" ", "").replace(":", "")
     if needle and needle in hay:
+        return True
+    if _contains_time_range(answer, fact):
         return True
     return bool(compact_needle) and compact_needle in compact_hay
 
