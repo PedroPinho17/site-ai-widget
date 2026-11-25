@@ -9,6 +9,14 @@ from dotenv import load_dotenv
 # Prefer a local .env when present; CI has no secrets and uses the placeholders below.
 load_dotenv()
 
+# Tests never reach the real LLM provider. The per-test fixture below is not
+# enough on its own: background work started by a test (suggested questions
+# after a PDF upload) can run after monkeypatch has restored the .env key.
+# An empty value also wins over the .env file in Settings. LIVE_DEMO=1 keeps it.
+if os.environ.get("LIVE_DEMO") != "1":
+    os.environ["GROQ_API_KEY"] = ""
+    os.environ["GROQ_API_KEY_FALLBACK"] = ""
+
 # Allow importing the app / settings during unit tests without a real .env
 os.environ.setdefault("JWT_SECRET", "unit-test-jwt-secret-at-least-32-chars!!")
 os.environ.setdefault(
@@ -137,8 +145,12 @@ def _no_live_llm(request, monkeypatch):
     ``.env`` may hold real keys for the running app; every test starts with none.
     A test that needs a key sets one itself. Live checks live in tests/integration
     and opt in with LIVE_DEMO=1.
+
+    "integration" only means "needs Postgres" (document uploads, for instance,
+    would otherwise call the real provider for suggested questions), so those
+    tests get no key either. Only an explicit LIVE_DEMO=1 run keeps the keys.
     """
-    if request.node.get_closest_marker("integration"):
+    if os.environ.get("LIVE_DEMO") == "1" and request.node.get_closest_marker("integration"):
         yield
         return
     from site_ai_widget.api.config import clear_settings_cache

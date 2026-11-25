@@ -58,7 +58,9 @@ def client(migrated, tmp_path, monkeypatch):
 
     monkeypatch.setenv("SITE_AI_WIDGET_FAKE_EMBEDDER", "1")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    # Empty, not deleted: a deleted variable makes Settings read the key from .env.
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY_FALLBACK", "")
     clear_settings_cache()
     reset_limiters()
     close_pool()
