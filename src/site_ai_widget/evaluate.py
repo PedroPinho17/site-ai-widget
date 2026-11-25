@@ -73,6 +73,9 @@ DEFAULT_QUESTIONS = _eval_paths()["questions"]
 
 MAX_QUOTA_RETRIES = 8
 MAX_CONNECTION_RETRIES = 3
+# Abort after this many SQL items in a row could not reach the client DB. One
+# blip is scored as that item's failure; a dead DB stops the run early.
+UNREACHABLE_ABORT_STREAK = 3
 UNREACHABLE_API_CODES = frozenset(
     {
         "db_host_unresolvable",
@@ -314,8 +317,10 @@ def run_eval(
     records: list[dict[str, Any]] = []
     if resume:
         saved = load_checkpoint(checkpoint_file)
-        done = set(saved["done"])
-        records = list(saved["records"])
+        # Ignore answers to questions no longer in the set (edited questions.json).
+        known = {i["id"] for i in items}
+        done = {x for x in saved["done"] if x in known}
+        records = [r for r in saved["records"] if r.get("id") in known]
     if batch_size < 1:
         batch_size = 1
     if delay < 0:
@@ -332,7 +337,32 @@ def run_eval(
 
     stamp = utc_stamp()
     results_path = results_dir / f"{stamp}.json"
-    full_run = only is None and limit is None and not done and len(pending) == len(items)
+    # SQL items in a row (this process) that never reached the client DB.
+    # A reachable SQL item resets it; doc/refusal items do not touch it.
+    unreachable_streak: list[str] = []
+    sql_attempted = 0
+
+    def _abort_unreachable() -> None:
+        """Drop the unreachable items so ``--resume`` retries them; keep the rest."""
+        dropped = set(unreachable_streak)
+        kept = [r for r in records if r.get("id") not in dropped]
+        records[:] = kept
+        done.difference_update(dropped)
+        log.error("%s", CLIENT_DB_UNREACHABLE)
+        if done:
+            save_checkpoint(
+                checkpoint_file,
+                {"done": sorted(done), "records": records, "results_path": str(results_path)},
+            )
+            partial_md.parent.mkdir(parents=True, exist_ok=True)
+            partial_md.write_text(
+                markdown_report(summarize(records), title="Evaluation (partial)", records=records),
+                encoding="utf-8",
+            )
+        else:
+            clear_checkpoint(checkpoint_file)
+            partial_md.unlink(missing_ok=True)
+        raise ClientDbUnreachable()
 
     for index, item in enumerate(pending, start=1):
         if delay and index > 1:
@@ -350,11 +380,14 @@ def run_eval(
         rec = _record_payload(item, scored, skipped=skipped)
         records.append(rec)
         done.add(item["id"])
-        if is_client_db_unreachable(item, tracker, skipped):
-            log.error("%s", CLIENT_DB_UNREACHABLE)
-            partial_md.unlink(missing_ok=True)
-            clear_checkpoint(checkpoint_file)
-            raise ClientDbUnreachable()
+        if item.get("type") == "sql":
+            sql_attempted += 1
+            if is_client_db_unreachable(item, tracker, skipped):
+                unreachable_streak.append(item["id"])
+                if len(unreachable_streak) >= UNREACHABLE_ABORT_STREAK:
+                    _abort_unreachable()
+            else:
+                unreachable_streak.clear()
         save_checkpoint(
             checkpoint_file,
             {"done": sorted(done), "records": records, "results_path": str(results_path)},
@@ -366,6 +399,16 @@ def run_eval(
                 markdown_report(summary, title="Evaluation (partial)", records=records),
                 encoding="utf-8",
             )
+
+    if sql_attempted and len(unreachable_streak) == sql_attempted:
+        # Every SQL item in this process failed to reach the DB (fewer than the
+        # streak threshold, e.g. ``--limit 2``): still not a score.
+        _abort_unreachable()
+
+    # Full = no --only/--limit and every question answered, whether in one go
+    # or across ``--resume`` runs.
+    answered = {r.get("id") for r in records}
+    full_run = only is None and limit is None and all(i["id"] in answered for i in items)
 
     summary = summarize(records)
     payload = {

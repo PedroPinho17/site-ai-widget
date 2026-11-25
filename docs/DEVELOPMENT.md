@@ -89,7 +89,7 @@ docker compose up -d app
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 ```
 
-Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes host files `eval/results/<timestamp>.json`, `eval/history.csv`, and (full run only) `docs/evaluation.md`. If every SQL attempt hits `db_error` / connection failure, the process exits with `client DB unreachable` and does **not** write those score files. Outputs are gitignored except `eval/questions.json`.
+Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes host files `eval/results/<timestamp>.json`, `eval/history.csv`, and (full run only) `docs/evaluation.md`. If 3 SQL items in a row (or every SQL item of a shorter run) cannot reach the client DB, the process exits with `client DB unreachable` (exit code 2) and does **not** write those score files. Answers already collected stay in the checkpoint and the unreachable items are left pending, so after fixing the connection `--resume` continues from there. A single isolated failure is scored on that item and the run goes on. A run finished with `--resume` that covers every question counts as a full run and writes `docs/evaluation.md`. Outputs are gitignored except `eval/questions.json`.
 
 ## Troubleshooting
 

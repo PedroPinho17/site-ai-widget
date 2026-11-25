@@ -240,9 +240,175 @@ def test_checkpoint_resume(tmp_path):
     )
     assert seen == ["sql-02"]
     assert len(payload["records"]) == 2
-    assert payload["partial"] is True
-    loaded = load_checkpoint(ck)
-    assert "sql-02" in loaded["done"]
+    # Resume that finishes every question is a full run: report written, checkpoint gone.
+    assert payload["partial"] is False
+    assert (tmp_path / "evaluation.md").is_file()
+    assert not (tmp_path / "evaluation.partial.md").exists()
+    assert not ck.exists()
+
+
+def _write_questions(tmp_path, items):
+    qpath = tmp_path / "q.json"
+    qpath.write_text(json.dumps({"company_slug": "mercearia-atlas", "items": items}), encoding="utf-8")
+    return qpath
+
+
+def _sql(i):
+    return {"id": f"sql-{i:02d}", "type": "sql", "lang": "pt", "question": f"q{i}", "reference": {"rows": [[i]]}}
+
+
+def _doc(i):
+    return {
+        "id": f"doc-{i:02d}",
+        "type": "doc",
+        "lang": "pt",
+        "question": "morada?",
+        "reference": {"fact": "Amendoeiras 48", "page": 1},
+    }
+
+
+def _run_paths(tmp_path):
+    return {
+        "results_dir": tmp_path / "results",
+        "history_path": tmp_path / "history.csv",
+        "checkpoint_file": tmp_path / ".checkpoint.json",
+        "partial_md": tmp_path / "evaluation.partial.md",
+        "full_md": tmp_path / "evaluation.md",
+    }
+
+
+def _ok_ask(company_id, item, tracker):
+    if item["type"] == "doc":
+        return SimpleNamespace(mode="docs", answer="Rua das Amendoeiras 48.", sources=[SimpleNamespace(page=1)])
+    tracker["sql_executed"] = True
+    return SimpleNamespace(mode="sql", rows=item["reference"]["rows"], answer="ok")
+
+
+def _unreachable(tracker):
+    tracker["sql_reason"] = "db_error"
+    tracker["api_code"] = "db_host_unresolvable"
+    tracker["last_error"] = RunnerError("db_error", error_class="ApiError", api_code="db_host_unresolvable")
+    return SimpleNamespace(mode="none", answer="Não consegui responder a isso.")
+
+
+def test_resume_of_partial_only_run_stays_partial(tmp_path):
+    qpath = _write_questions(tmp_path, [_doc(1), _sql(1), _sql(2)])
+    paths = _run_paths(tmp_path)
+    first = run_eval(
+        questions_path=qpath, only="sql", limit=1, ask_fn=_ok_ask, company_id="cid",
+        sleep=lambda _s: None, **paths,
+    )
+    assert first["partial"] is True
+    resumed = run_eval(
+        questions_path=qpath, only="sql", resume=True, ask_fn=_ok_ask, company_id="cid",
+        sleep=lambda _s: None, **paths,
+    )
+    assert resumed["partial"] is True
+    assert not paths["full_md"].exists()
+    # Without --only the resume covers the remaining doc item and completes.
+    final = run_eval(
+        questions_path=qpath, resume=True, ask_fn=_ok_ask, company_id="cid",
+        sleep=lambda _s: None, **paths,
+    )
+    assert final["partial"] is False
+    assert {r["id"] for r in final["records"]} == {"doc-01", "sql-01", "sql-02"}
+    assert paths["full_md"].is_file()
+    assert not paths["checkpoint_file"].exists()
+
+
+def test_resume_ignores_records_for_removed_questions(tmp_path):
+    qpath = _write_questions(tmp_path, [_sql(1)])
+    paths = _run_paths(tmp_path)
+    save_checkpoint(
+        paths["checkpoint_file"],
+        {
+            "done": ["sql-99"],
+            "records": [{"id": "sql-99", "type": "sql", "correct": False, "reason": "sql_mismatch"}],
+        },
+    )
+    payload = run_eval(
+        questions_path=qpath, resume=True, ask_fn=_ok_ask, company_id="cid", sleep=lambda _s: None, **paths,
+    )
+    assert [r["id"] for r in payload["records"]] == ["sql-01"]
+    assert payload["summary"]["total"] == 1
+    assert payload["partial"] is False
+
+
+def test_isolated_unreachable_item_is_scored_and_run_continues(tmp_path):
+    qpath = _write_questions(tmp_path, [_sql(1), _sql(2), _sql(3)])
+    paths = _run_paths(tmp_path)
+
+    def ask_fn(company_id, item, tracker):
+        if item["id"] == "sql-02":
+            return _unreachable(tracker)
+        return _ok_ask(company_id, item, tracker)
+
+    payload = run_eval(
+        questions_path=qpath, ask_fn=ask_fn, company_id="cid", sleep=lambda _s: None, **paths,
+    )
+    by_id = {r["id"]: r for r in payload["records"]}
+    assert by_id["sql-01"]["correct"] and by_id["sql-03"]["correct"]
+    assert by_id["sql-02"]["correct"] is False
+    assert payload["partial"] is False
+    assert paths["full_md"].is_file()
+
+
+def test_unreachable_streak_keeps_progress_for_resume(tmp_path):
+    items = [_doc(1), _sql(1), _sql(2), _sql(3), _sql(4), _sql(5), _sql(6)]
+    qpath = _write_questions(tmp_path, items)
+    paths = _run_paths(tmp_path)
+    db_up = {"value": True}
+    seen: list[str] = []
+
+    def ask_fn(company_id, item, tracker):
+        seen.append(item["id"])
+        if item["id"] == "sql-02":
+            db_up["value"] = False
+        if item["type"] == "sql" and not db_up["value"]:
+            return _unreachable(tracker)
+        return _ok_ask(company_id, item, tracker)
+
+    with pytest.raises(ClientDbUnreachable):
+        run_eval(questions_path=qpath, ask_fn=ask_fn, company_id="cid", sleep=lambda _s: None, **paths)
+    # Aborted after 3 unreachable SQL items in a row, before sql-05.
+    assert seen == ["doc-01", "sql-01", "sql-02", "sql-03", "sql-04"]
+    saved = load_checkpoint(paths["checkpoint_file"])
+    assert saved["done"] == ["doc-01", "sql-01"]
+    assert {r["id"] for r in saved["records"]} == {"doc-01", "sql-01"}
+    assert not paths["history_path"].exists()
+    assert not paths["full_md"].exists()
+
+    db_up["value"] = True
+    seen.clear()
+
+    def ask_ok(company_id, item, tracker):
+        seen.append(item["id"])
+        return _ok_ask(company_id, item, tracker)
+
+    payload = run_eval(
+        questions_path=qpath, resume=True, ask_fn=ask_ok, company_id="cid", sleep=lambda _s: None, **paths,
+    )
+    assert seen == ["sql-02", "sql-03", "sql-04", "sql-05", "sql-06"]
+    assert payload["partial"] is False
+    assert all(r["correct"] for r in payload["records"])
+    assert paths["full_md"].is_file()
+
+
+def test_dockerignore_excludes_dumps_and_dev_trees():
+    root = Path(__file__).resolve().parents[2]
+    lines = {
+        line.strip()
+        for line in (root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    for pattern in (
+        ".env", ".env.*", "*.dump", "db-backup.sql", "backup/", "tests/", ".github/",
+        "eval/results/", "docs/evaluation.partial.md", "panel/node_modules/", ".git/",
+    ):
+        assert pattern in lines, pattern
+    # The image build needs these; they must not be excluded.
+    for needed in ("src/", "db/", "demo/", "README.md", "pyproject.toml"):
+        assert needed not in lines and needed.rstrip("/") not in lines
 
 
 def test_filter_only_and_limit():
@@ -384,7 +550,10 @@ def test_unreachable_client_db_aborts_without_score_files(tmp_path):
             full_md=full,
         )
     assert CLIENT_DB_UNREACHABLE in str(exc.value)
-    assert calls["n"] == 1
+    # Run shorter than the streak threshold: every SQL item failed, so it still aborts.
+    assert calls["n"] == 2
+    assert not (tmp_path / ".checkpoint.json").exists()
+    assert not (tmp_path / "evaluation.partial.md").exists()
     assert not history.exists()
     assert not full.exists()
     assert not results.exists() or not any(results.iterdir())

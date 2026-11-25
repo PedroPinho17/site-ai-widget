@@ -14,3 +14,16 @@ panel/dist/
 .venv/
 __pycache__/
 .git/
+# Database dumps/backups: never in the build context.
+*.dump
+*.sql.gz
+db-backup.sql
+backup/
+# Dev-only trees and caches (the Dockerfile copies only src/, db/, demo/).
+tests/
+.github/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.pyc
