@@ -2,11 +2,30 @@
 
 [Português (PT)](README.pt.md)
 
+![Demo: a visitor opens the widget on the fictional Mercearia Atlas site, asks the price of olive oil (answered from the database), asks about the returns policy (answered from the PDF with a page citation) and opens the cited PDF page](docs/media/demo.gif)
+
+▶ [Watch the full demo video (widget + admin panel, MP4)](docs/media/demo.mp4)
+
 Embeddable AI assistant for a company website. Visitors ask in a chat widget; answers come from **uploaded PDFs** (with page citations) and from the **company’s own database** through guarded text-to-SQL. Company staff use an **admin panel** (documents, schema approval, widget look, conversations, dashboard).
 
 Demo data is fictional (Mercearia Atlas, Oficina Lima). There is no licence file.
 
 **Author:** [Pedro Pinho](https://github.com/PedroPinho17) · [LinkedIn](https://www.linkedin.com/in/pedropinho19/)
+
+## Screenshots
+
+All screenshots come from the local demo with fictional data.
+
+| | |
+|---|---|
+| <img src="docs/media/widget-price.png" width="420" alt="Chat widget on the demo site answering “Quanto custa o azeite?” with the olive oil price from the database"> | <img src="docs/media/widget-doc.png" width="420" alt="Chat widget answering the returns-policy question from the PDF manual, with a citation chip for page 3"> |
+| **Database answer:** price question → safe text-to-SQL | **Document answer:** PDF facts with a page citation |
+| <img src="docs/media/widget-fullscreen.png" width="420" alt="Widget in full-screen mode showing the whole conversation"> | <img src="docs/media/panel-dashboard.png" width="420" alt="Admin panel dashboard with document, table and key counts, questions per day and answer sources"> |
+| **Full-screen widget** | **Panel dashboard:** usage and answer sources |
+| <img src="docs/media/panel-documents.png" width="420" alt="Documents page with the uploaded PDF manual and an inline preview"> | <img src="docs/media/panel-widget.png" width="420" alt="Widget settings with colour picker, contrast badge, presets and a live preview of the widget"> |
+| **Documents:** upload and inline preview | **Widget settings:** colour picker and live preview |
+| <img src="docs/media/panel-test.png" width="420" alt="Test assistant page answering the returns-policy question with its document citation and response time"> | <img src="docs/media/panel-conversations.png" width="420" alt="Conversations page listing visitor chats with language, message count and answer source"> |
+| **Test assistant:** try questions before going live | **Conversations:** visitor chats by date and source |
 
 ## Stack
 
@@ -144,7 +163,7 @@ The script is `GET /embed.js`. Origin must match the key’s allowlist exactly.
 
 ## Evaluation
 
-The evaluation set is `eval/questions.json` (40 fictional Atlas items). Run it **inside the app container** so the stored client DSN host `clientdb` resolves. Compose bind-mounts `./eval` and `./docs` into `/app`, so questions are read from the host and `eval/results/`, `eval/history.csv`, and `docs/evaluation.md` are written back to the host (not into the image). Recreate the app container after pulling this compose change (`docker compose up -d app`).
+The evaluation set is `eval/questions.json` (40 fictional Atlas items). Run it **inside the app container** so the stored client DSN host `clientdb` resolves. Compose bind-mounts `./eval` and `./docs` into `/app`, so questions are read from the host and `eval/results/`, `eval/history.csv`, and `docs/evaluation.md` are written back to the host (not into the image). Start all services first (`docker compose up -d --build`; `up -d app` alone does not start `clientdb`).
 
 ```bash
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
@@ -152,7 +171,15 @@ docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-si
 
 If the client DB is unreachable, the runner stops with `client DB unreachable` and does not write `docs/evaluation.md` or `eval/history.csv`.
 
-**Results: not run yet** (`docs/evaluation.md` is not in the repository).
+**Latest full run (25 Nov 2026, Groq free tier): 29/40 correct (72.5%)**
+
+| Type | Correct | What is checked |
+|---|---|---|
+| SQL | 15/20 | Same rows as the reference query (order, column names and up to 2 identifying extra columns ignored; numeric tolerance 0.01) |
+| Documents | 11/15 | Answer contains the reference fact and cites the right page when it cites |
+| Refusals | 3/5 | No SQL executed and an unknown/refusal answer |
+
+The per-run report (`docs/evaluation.md`) and raw results (`eval/results/`) are generated locally and are not committed.
 
 ## Docs
 
