@@ -14,6 +14,9 @@ _TIME = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
 _NUMBER = re.compile(r"^-?\d+(?:[.,]\d+)?$")
 
 DEFAULT_TOLERANCE = 0.01
+# Identifying columns a correct query may add next to the asked values
+# (e.g. ``name, price`` for "what does X cost?"). More than this is SELECT *.
+MAX_EXTRA_COLUMNS = 2
 
 
 def strip_accents(text: str) -> str:
@@ -76,17 +79,60 @@ def _row_key(row: list[Any] | tuple[Any, ...], *, tolerance: float) -> tuple:
     return tuple(sorted(cells))
 
 
+def _row_cells(row: list[Any] | tuple[Any, ...], *, tolerance: float) -> Counter:
+    return Counter(normalize_cell(cell, tolerance=tolerance) for cell in row)
+
+
+def _contains(actual: Counter, expected: Counter, *, max_extra: int) -> bool:
+    """Every expected cell is in the actual row, with at most ``max_extra`` more."""
+    extra = sum(actual.values()) - sum(expected.values())
+    return 0 <= extra <= max_extra and not (expected - actual)
+
+
+def _perfect_matching(adjacent: list[list[int]], size: int) -> bool:
+    """Bipartite matching (Kuhn): can every expected row take its own actual row?"""
+    owner = [-1] * size
+
+    def assign(row: int, seen: list[bool]) -> bool:
+        for col in adjacent[row]:
+            if seen[col]:
+                continue
+            seen[col] = True
+            if owner[col] == -1 or assign(owner[col], seen):
+                owner[col] = row
+                return True
+        return False
+
+    return all(assign(row, [False] * size) for row in range(len(adjacent)))
+
+
 def rows_match(
     actual: list[list[Any]] | None,
     expected: list[list[Any]] | None,
     *,
     tolerance: float = DEFAULT_TOLERANCE,
+    max_extra_columns: int = MAX_EXTRA_COLUMNS,
 ) -> bool:
-    """True when the two tables have the same cells per row (order-independent)."""
+    """True when both tables hold the same rows (row and column order ignored).
+
+    The generated query may add up to ``max_extra_columns`` columns that
+    identify each row (e.g. the product name next to its price); every expected
+    cell must still be in its own actual row and the row count must be equal.
+    """
     left = actual or []
     right = expected or []
     if len(left) != len(right):
         return False
     left_keys = Counter(_row_key(row, tolerance=tolerance) for row in left)
     right_keys = Counter(_row_key(row, tolerance=tolerance) for row in right)
-    return left_keys == right_keys
+    if left_keys == right_keys:
+        return True
+    if max_extra_columns <= 0:
+        return False
+    left_cells = [_row_cells(row, tolerance=tolerance) for row in left]
+    right_cells = [_row_cells(row, tolerance=tolerance) for row in right]
+    adjacent = [
+        [i for i, have in enumerate(left_cells) if _contains(have, want, max_extra=max_extra_columns)]
+        for want in right_cells
+    ]
+    return _perfect_matching(adjacent, len(left))

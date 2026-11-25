@@ -158,23 +158,30 @@ def _default_ask(company_id: str, item: dict[str, Any], tracker: dict[str, Any])
     original_run = sql_runner.run_sql
     original_sql = pipeline.answer_with_sql
 
-    def wrapped_run(*args: Any, **kwargs: Any):
-        tracker["sql_executed"] = True
-        try:
-            return original_run(*args, **kwargs)
-        except Exception as exc:
-            tracker["last_error"] = exc
-            tracker["sql_error_class"] = getattr(exc, "error_class", None) or type(exc).__name__
-            tracker["sqlstate_class"] = getattr(exc, "sqlstate_class", None) or sqlstate_class(exc)
-            tracker["api_code"] = getattr(exc, "api_code", None)
-            raise
+    def tracked(run: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapped_run(*args: Any, **kwargs: Any):
+            tracker["sql_executed"] = True
+            try:
+                return run(*args, **kwargs)
+            except Exception as exc:
+                tracker["last_error"] = exc
+                tracker["sql_error_class"] = getattr(exc, "error_class", None) or type(exc).__name__
+                tracker["sqlstate_class"] = getattr(exc, "sqlstate_class", None) or sqlstate_class(exc)
+                tracker["api_code"] = getattr(exc, "api_code", None)
+                raise
+
+        return wrapped_run
 
     def wrapped_sql(*args: Any, **kwargs: Any):
         out = original_sql(*args, **kwargs)
         tracker["sql_reason"] = getattr(out, "reason", None)
         return out
 
-    sql_runner.run_sql = wrapped_run  # type: ignore[method-assign]
+    # ``pipeline`` binds ``run_sql`` at import (``from ... import run_sql``), so
+    # patch that name as well as the runner module, or executions go unseen.
+    original_pipeline_run = pipeline.run_sql
+    sql_runner.run_sql = tracked(original_run)  # type: ignore[method-assign]
+    pipeline.run_sql = tracked(original_pipeline_run)  # type: ignore[method-assign]
     pipeline.answer_with_sql = wrapped_sql  # type: ignore[method-assign]
     try:
         return answer_question(
@@ -184,6 +191,7 @@ def _default_ask(company_id: str, item: dict[str, Any], tracker: dict[str, Any])
         )
     finally:
         sql_runner.run_sql = original_run  # type: ignore[method-assign]
+        pipeline.run_sql = original_pipeline_run  # type: ignore[method-assign]
         pipeline.answer_with_sql = original_sql  # type: ignore[method-assign]
 
 
@@ -284,6 +292,8 @@ def _record_payload(item: dict[str, Any], scored: dict[str, Any], *, skipped: st
         rec["sql_executed"] = scored["sql_executed"]
     if "pages" in scored:
         rec["pages"] = scored["pages"]
+    if "rows" in scored:
+        rec["rows"] = scored["rows"]
     return rec
 
 

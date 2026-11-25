@@ -6,6 +6,15 @@ from typing import Any
 from site_ai_widget.answer_checks import is_no_information
 from site_ai_widget.evalkit.compare import DEFAULT_TOLERANCE, rows_match, strip_accents
 
+MAX_RECORDED_ROWS = 10
+
+
+def _json_cell(value: Any) -> Any:
+    """Keep JSON scalars; Decimal/date/time and the rest become text."""
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    return str(value)
+
 _BUSY_MARKERS = (
     "muitos pedidos",
     "many requests",
@@ -93,6 +102,8 @@ def score_sql(response: Any, reference: dict[str, Any], *, sql_executed: bool) -
         "correct": bool(ok),
         "reason": "ok" if ok else "sql_mismatch",
         "sql_executed": sql_executed,
+        # First rows the assistant returned (fictional demo data), to debug mismatches.
+        "rows": [[_json_cell(cell) for cell in row] for row in actual[:MAX_RECORDED_ROWS]],
     }
 
 

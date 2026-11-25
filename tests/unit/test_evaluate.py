@@ -602,6 +602,56 @@ def test_is_client_db_unreachable_helpers():
     assert not is_client_db_unreachable({"type": "doc"}, {"sql_reason": "db_error"}, None)
 
 
+def test_rows_match_allows_identifying_extra_columns():
+    # "Qual o preço do Azeite…?" answered as ``name, price``.
+    assert rows_match([["Azeite Atlas Premium 750 ml", "8.49"]], [[8.49]])
+    assert rows_match([["Água mineral 1,5 L", 120]], [[120]])
+    assert rows_match([["Loja Centro", "Azeite", 24]], [[24]])
+    # Up to two extra columns; three is SELECT * territory.
+    assert not rows_match([["a", "b", "c", 24]], [[24]])
+    assert not rows_match([["a", 24]], [[24]], max_extra_columns=0)
+    # The asked value must still be right, and row counts must agree.
+    assert not rows_match([["Azeite", "9.49"]], [[8.49]])
+    assert not rows_match([["Azeite", 8.49], ["Leite", 0.89]], [[8.49]])
+    # Each expected row needs its own actual row (no reuse).
+    assert not rows_match([["x", 1, 2], ["y", 3, 4]], [[1, 2], [1, 2]])
+    # Greedy would pair [1] with the first row and fail; matching must not.
+    assert rows_match([["a", 1, 2], ["b", 1]], [[1], [1, 2]])
+
+
+def test_default_ask_tracks_sql_run_through_pipeline_binding(monkeypatch):
+    from site_ai_widget import ask_service
+    from site_ai_widget.evaluate import _default_ask
+    from site_ai_widget.sqlqa import pipeline
+
+    monkeypatch.setattr(pipeline, "run_sql", lambda *a, **k: "ran")
+
+    def fake_answer(company_id, question, *, lang=None):
+        # Same call path as the real pipeline: the name bound inside ``pipeline``.
+        assert pipeline.run_sql("SELECT 1", company_id=company_id) == "ran"
+        return SimpleNamespace(mode="sql", rows=[[1]], answer="1")
+
+    monkeypatch.setattr(ask_service, "answer_question", fake_answer)
+    tracker = {"sql_executed": False, "last_error": None}
+    _default_ask("cid", {"question": "q", "lang": "pt"}, tracker)
+    assert tracker["sql_executed"] is True
+    # Patches are undone afterwards.
+    assert pipeline.run_sql("x") == "ran"
+
+
+def test_sql_record_keeps_json_safe_rows():
+    from datetime import time
+    from decimal import Decimal
+
+    scored = score_sql(
+        SimpleNamespace(mode="sql", rows=[["Azeite", Decimal("8.49"), time(9, 0)]]),
+        {"rows": [[8.49]]},
+        sql_executed=True,
+    )
+    assert scored["rows"] == [["Azeite", "8.49", "09:00:00"]]
+    json.dumps(scored)
+
+
 def test_times_and_numeric_tolerance_edges():
     assert rows_match([[203.76]], [[203.764]], tolerance=0.01)
     assert not rows_match([[203.76]], [[204.0]], tolerance=0.01)

@@ -85,9 +85,13 @@ The saved client DSN uses the Compose hostname `clientdb` (port 5432 **inside** 
 `docker-compose.yml` bind-mounts `./eval` → `/app/eval` and `./docs` → `/app/docs`, and sets `EVAL_ROOT=/app`. The image does not contain `eval/` or `docs/` (see `.dockerignore`). After changing those mounts, recreate the service so they attach:
 
 ```bash
-docker compose up -d app
+docker compose up -d --build
 docker compose exec app python -m site_ai_widget.evaluate --delay 0.5 --batch-size 5
 ```
+
+Bring up **all** services: `docker compose up -d app` alone does not start `clientdb` (the app does not depend on it), and the image must be rebuilt after code changes because `src/` is copied into it.
+
+SQL items use execution accuracy: same rows in any order, numeric tolerance 0.01, column names ignored. The generated query may add up to 2 identifying columns (e.g. `name, price` when only the price is expected); the row count must match. Each SQL record in `eval/results/*.json` keeps the first 10 returned rows to debug mismatches.
 
 Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes host files `eval/results/<timestamp>.json`, `eval/history.csv`, and (full run only) `docs/evaluation.md`. If 3 SQL items in a row (or every SQL item of a shorter run) cannot reach the client DB, the process exits with `client DB unreachable` (exit code 2) and does **not** write those score files. Answers already collected stay in the checkpoint and the unreachable items are left pending, so after fixing the connection `--resume` continues from there. A single isolated failure is scored on that item and the run goes on. A run finished with `--resume` that covers every question counts as a full run and writes `docs/evaluation.md`. Outputs are gitignored except `eval/questions.json`.
 
@@ -95,7 +99,7 @@ Flags: `--resume`, `--limit`, `--only doc|sql|refusal`. Writes host files `eval/
 
 ### Eval `client DB unreachable` / SQL `reason=db_error` in ~3s
 
-The host cannot open `clientdb:5432`. Use `docker compose exec app …` as above. Logs may show `error_class=ApiError api_code=db_host_unresolvable` or `error_class=OperationalError sqlstate_class=08` — never the DSN.
+The eval cannot open `clientdb:5432`. Run it with `docker compose exec app …` as above (the name does not resolve on the host). If it already runs in the container, check `docker compose ps`: when `clientdb` is stopped its name does not resolve either — `docker compose up -d clientdb`. Logs may show `error_class=ApiError api_code=db_host_unresolvable` or `error_class=OperationalError sqlstate_class=08` — never the DSN.
 
 ### Groq quota / HTTP 429
 
